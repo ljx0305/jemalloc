@@ -305,6 +305,7 @@ case "${host}" in
   *-*-freebsd*)
 	CFLAGS="$CFLAGS"
 	abi="elf"
+	AC_DEFINE([JEMALLOC_SYSCTL_VM_OVERCOMMIT], [ ])
 	AC_DEFINE([JEMALLOC_PURGE_MADVISE_FREE], [ ])
 	force_lazy_lock="1"
 	;;
@@ -329,6 +330,7 @@ case "${host}" in
 	CPPFLAGS="$CPPFLAGS -D_GNU_SOURCE"
 	abi="elf"
 	AC_DEFINE([JEMALLOC_HAS_ALLOCA_H])
+	AC_DEFINE([JEMALLOC_PROC_SYS_VM_OVERCOMMIT_MEMORY], [ ])
 	AC_DEFINE([JEMALLOC_PURGE_MADVISE_DONTNEED], [ ])
 	AC_DEFINE([JEMALLOC_THREADED_INIT], [ ])
 	AC_DEFINE([JEMALLOC_USE_CXX_THROW], [ ])
@@ -943,8 +945,7 @@ fi
 
 dnl Support the junk/zero filling option by default.
 AC_ARG_ENABLE([fill],
-  [AS_HELP_STRING([--disable-fill],
-                  [Disable support for junk/zero filling, quarantine, and redzones])],
+  [AS_HELP_STRING([--disable-fill], [Disable support for junk/zero filling])],
 [if test "x$enable_fill" = "xno" ; then
   enable_fill="0"
 else
@@ -985,35 +986,6 @@ if test "x$enable_utrace" = "x1" ; then
   AC_DEFINE([JEMALLOC_UTRACE], [ ])
 fi
 AC_SUBST([enable_utrace])
-
-dnl Support Valgrind by default.
-AC_ARG_ENABLE([valgrind],
-  [AS_HELP_STRING([--disable-valgrind], [Disable support for Valgrind])],
-[if test "x$enable_valgrind" = "xno" ; then
-  enable_valgrind="0"
-else
-  enable_valgrind="1"
-fi
-],
-[enable_valgrind="1"]
-)
-if test "x$enable_valgrind" = "x1" ; then
-  JE_COMPILABLE([valgrind], [
-#include <valgrind/valgrind.h>
-#include <valgrind/memcheck.h>
-
-#if !defined(VALGRIND_RESIZEINPLACE_BLOCK)
-#  error "Incompatible Valgrind version"
-#endif
-], [], [je_cv_valgrind])
-  if test "x${je_cv_valgrind}" = "xno" ; then
-    enable_valgrind="0"
-  fi
-  if test "x$enable_valgrind" = "x1" ; then
-    AC_DEFINE([JEMALLOC_VALGRIND], [ ])
-  fi
-fi
-AC_SUBST([enable_valgrind])
 
 dnl Do not support the xmalloc option by default.
 AC_ARG_ENABLE([xmalloc],
@@ -1239,13 +1211,8 @@ fi
 
 CPPFLAGS="$CPPFLAGS -D_REENTRANT"
 
-dnl Check whether clock_gettime(2) is in libc or librt.  This function is only
-dnl used in test code, so save the result to TESTLIBS to avoid poluting LIBS.
-SAVED_LIBS="${LIBS}"
-LIBS=
-AC_SEARCH_LIBS([clock_gettime], [rt], [TESTLIBS="${LIBS}"])
-AC_SUBST([TESTLIBS])
-LIBS="${SAVED_LIBS}"
+dnl Check whether clock_gettime(2) is in libc or librt.
+AC_SEARCH_LIBS([clock_gettime], [rt])
 
 dnl Check if the GNU-specific secure_getenv function exists.
 AC_CHECK_FUNC([secure_getenv],
@@ -1751,7 +1718,6 @@ AC_MSG_RESULT([CPPFLAGS           : ${CPPFLAGS}])
 AC_MSG_RESULT([LDFLAGS            : ${LDFLAGS}])
 AC_MSG_RESULT([EXTRA_LDFLAGS      : ${EXTRA_LDFLAGS}])
 AC_MSG_RESULT([LIBS               : ${LIBS}])
-AC_MSG_RESULT([TESTLIBS           : ${TESTLIBS}])
 AC_MSG_RESULT([RPATH_EXTRA        : ${RPATH_EXTRA}])
 AC_MSG_RESULT([])
 AC_MSG_RESULT([XSLTPROC           : ${XSLTPROC}])
@@ -1786,7 +1752,6 @@ AC_MSG_RESULT([prof-gcc           : ${enable_prof_gcc}])
 AC_MSG_RESULT([tcache             : ${enable_tcache}])
 AC_MSG_RESULT([fill               : ${enable_fill}])
 AC_MSG_RESULT([utrace             : ${enable_utrace}])
-AC_MSG_RESULT([valgrind           : ${enable_valgrind}])
 AC_MSG_RESULT([xmalloc            : ${enable_xmalloc}])
 AC_MSG_RESULT([munmap             : ${enable_munmap}])
 AC_MSG_RESULT([lazy_lock          : ${enable_lazy_lock}])

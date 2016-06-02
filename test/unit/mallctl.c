@@ -139,7 +139,6 @@ TEST_BEGIN(test_mallctl_config)
 	TEST_MALLCTL_CONFIG(tcache, bool);
 	TEST_MALLCTL_CONFIG(tls, bool);
 	TEST_MALLCTL_CONFIG(utrace, bool);
-	TEST_MALLCTL_CONFIG(valgrind, bool);
 	TEST_MALLCTL_CONFIG(xmalloc, bool);
 
 #undef TEST_MALLCTL_CONFIG
@@ -169,8 +168,6 @@ TEST_BEGIN(test_mallctl_opt)
 	TEST_MALLCTL_OPT(ssize_t, decay_time, always);
 	TEST_MALLCTL_OPT(bool, stats_print, always);
 	TEST_MALLCTL_OPT(const char *, junk, fill);
-	TEST_MALLCTL_OPT(size_t, quarantine, fill);
-	TEST_MALLCTL_OPT(bool, redzone, fill);
 	TEST_MALLCTL_OPT(bool, zero, fill);
 	TEST_MALLCTL_OPT(bool, utrace, utrace);
 	TEST_MALLCTL_OPT(bool, xmalloc, xmalloc);

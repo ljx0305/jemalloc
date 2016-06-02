@@ -65,7 +65,6 @@
     <ClInclude Include="..\..\..\..\include\jemalloc\internal\public_unnamespace.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\internal\ql.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\internal\qr.h" />
-    <ClInclude Include="..\..\..\..\include\jemalloc\internal\quarantine.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\internal\rb.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\internal\rtree.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\internal\size_classes.h" />
@@ -74,7 +73,6 @@
     <ClInclude Include="..\..\..\..\include\jemalloc\internal\ticker.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\internal\tsd.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\internal\util.h" />
-    <ClInclude Include="..\..\..\..\include\jemalloc\internal\valgrind.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\jemalloc.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\jemalloc_defs.h" />
     <ClInclude Include="..\..\..\..\include\jemalloc\jemalloc_macros.h" />
@@ -106,10 +104,8 @@
     <ClCompile Include="..\..\..\..\src\mutex.c" />
     <ClCompile Include="..\..\..\..\src\nstime.c" />
     <ClCompile Include="..\..\..\..\src\pages.c" />
-    <ClCompile Include="..\..\..\..\src\ph.c" />
     <ClCompile Include="..\..\..\..\src\prng.c" />
     <ClCompile Include="..\..\..\..\src\prof.c" />
-    <ClCompile Include="..\..\..\..\src\quarantine.c" />
     <ClCompile Include="..\..\..\..\src\rtree.c" />
     <ClCompile Include="..\..\..\..\src\stats.c" />
     <ClCompile Include="..\..\..\..\src\tcache.c" />
@@ -252,7 +248,7 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>_REENTRANT;_WINDLL;DLLEXPORT;JEMALLOC_DEBUG;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>..\..\..\..\include;..\..\..\..\include\msvc_compat;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <DisableSpecificWarnings>4090;4146;4244;4267;4334</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4090;4146;4267;4334</DisableSpecificWarnings>
       <ProgramDataBaseFileName>$(OutputPath)$(TargetName).pdb</ProgramDataBaseFileName>
     </ClCompile>
     <Link>
@@ -269,7 +265,7 @@
       <PreprocessorDefinitions>JEMALLOC_DEBUG;_REENTRANT;JEMALLOC_EXPORT=;_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>..\..\..\..\include;..\..\..\..\include\msvc_compat;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <DisableSpecificWarnings>4090;4146;4244;4267;4334</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4090;4146;4267;4334</DisableSpecificWarnings>
       <ProgramDataBaseFileName>$(OutputPath)$(TargetName).pdb</ProgramDataBaseFileName>
     </ClCompile>
     <Link>
@@ -285,7 +281,7 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>_REENTRANT;_WINDLL;DLLEXPORT;JEMALLOC_DEBUG;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>..\..\..\..\include;..\..\..\..\include\msvc_compat;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <DisableSpecificWarnings>4090;4146;4244;4267;4334</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4090;4146;4267;4334</DisableSpecificWarnings>
       <ProgramDataBaseFileName>$(OutputPath)$(TargetName).pdb</ProgramDataBaseFileName>
     </ClCompile>
     <Link>
@@ -302,8 +298,9 @@
       <PreprocessorDefinitions>JEMALLOC_DEBUG;_REENTRANT;JEMALLOC_EXPORT=;_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>..\..\..\..\include;..\..\..\..\include\msvc_compat;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <DisableSpecificWarnings>4090;4146;4244;4267;4334</DisableSpecificWarnings>
-      <ProgramDataBaseFileName>$(OutputPath)$(TargetName).pdb</ProgramDataBaseFileName>
+      <DisableSpecificWarnings>4090;4146;4267;4334</DisableSpecificWarnings>
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
+      <MinimalRebuild>false</MinimalRebuild>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -320,7 +317,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>_REENTRANT;_WINDLL;DLLEXPORT;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>..\..\..\..\include;..\..\..\..\include\msvc_compat;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <DisableSpecificWarnings>4090;4146;4244;4267;4334</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4090;4146;4267;4334</DisableSpecificWarnings>
       <ProgramDataBaseFileName>$(OutputPath)$(TargetName).pdb</ProgramDataBaseFileName>
     </ClCompile>
     <Link>
@@ -341,7 +338,7 @@
       <PreprocessorDefinitions>_REENTRANT;JEMALLOC_EXPORT=;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>..\..\..\..\include;..\..\..\..\include\msvc_compat;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <DisableSpecificWarnings>4090;4146;4244;4267;4334</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4090;4146;4267;4334</DisableSpecificWarnings>
       <ProgramDataBaseFileName>$(OutputPath)$(TargetName).pdb</ProgramDataBaseFileName>
     </ClCompile>
     <Link>
@@ -361,7 +358,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <AdditionalIncludeDirectories>..\..\..\..\include;..\..\..\..\include\msvc_compat;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_REENTRANT;_WINDLL;DLLEXPORT;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <DisableSpecificWarnings>4090;4146;4244;4267;4334</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4090;4146;4267;4334</DisableSpecificWarnings>
       <ProgramDataBaseFileName>$(OutputPath)$(TargetName).pdb</ProgramDataBaseFileName>
     </ClCompile>
     <Link>
@@ -382,8 +379,8 @@
       <PreprocessorDefinitions>_REENTRANT;JEMALLOC_EXPORT=;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>..\..\..\..\include;..\..\..\..\include\msvc_compat;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <DisableSpecificWarnings>4090;4146;4244;4267;4334</DisableSpecificWarnings>
-      <ProgramDataBaseFileName>$(OutputPath)$(TargetName).pdb</ProgramDataBaseFileName>
+      <DisableSpecificWarnings>4090;4146;4267;4334</DisableSpecificWarnings>
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

@@ -8,12 +8,6 @@
 #define	RUN_MAXREGS		(1U << LG_RUN_MAXREGS)
 
 /*
- * Minimum redzone size.  Redzones may be larger than this if necessary to
- * preserve region alignment.
- */
-#define	REDZONE_MINSIZE		16
-
-/*
  * The minimum ratio of active:dirty pages per arena is computed as:
  *
  *   (nactive >> lg_dirty_mult) >= ndirty
@@ -160,7 +154,7 @@ struct arena_chunk_map_misc_s {
 	 * 2) arena_run_t conceptually uses this linkage for in-use non-full
 	 *    runs, rather than directly embedding linkage.
 	 */
-	ph_node_t				ph_link;
+	phn(arena_chunk_map_misc_t)		ph_link;
 
 	union {
 		/* Linkage for list of dirty runs. */
@@ -176,17 +170,18 @@ struct arena_chunk_map_misc_s {
 		arena_run_t			run;
 	};
 };
+typedef ph(arena_chunk_map_misc_t) arena_run_heap_t;
 #endif /* JEMALLOC_ARENA_STRUCTS_A */
 
 #ifdef JEMALLOC_ARENA_STRUCTS_B
 /* Arena chunk header. */
 struct arena_chunk_s {
 	/*
-	 * A pointer to the arena that owns the chunk is stored within the node.
-	 * This field as a whole is used by chunks_rtree to support both
-	 * ivsalloc() and core-based debugging.
+	 * A pointer to the arena that owns the chunk is stored within the
+	 * extent structure.  This field as a whole is used by chunks_rtree to
+	 * support both ivsalloc() and core-based debugging.
 	 */
-	extent_node_t		node;
+	extent_t		extent;
 
 	/*
 	 * Map of pages within chunk that keeps track of free/large/small.  The
@@ -204,41 +199,21 @@ struct arena_chunk_s {
  *
  * Each run has the following layout:
  *
- *               /--------------------\
- *               | pad?               |
- *               |--------------------|
- *               | redzone            |
- *   reg0_offset | region 0           |
- *               | redzone            |
- *               |--------------------| \
- *               | redzone            | |
- *               | region 1           |  > reg_interval
- *               | redzone            | /
- *               |--------------------|
- *               | ...                |
- *               | ...                |
- *               | ...                |
- *               |--------------------|
- *               | redzone            |
- *               | region nregs-1     |
- *               | redzone            |
- *               |--------------------|
- *               | alignment pad?     |
- *               \--------------------/
- *
- * reg_interval has at least the same minimum alignment as reg_size; this
- * preserves the alignment constraint that sa2u() depends on.  Alignment pad is
- * either 0 or redzone_size; it is present only if needed to align reg0_offset.
+ *   /--------------------\
+ *   | region 0           |
+ *   |--------------------|
+ *   | region 1           |
+ *   |--------------------|
+ *   | ...                |
+ *   | ...                |
+ *   | ...                |
+ *   |--------------------|
+ *   | region nregs-1     |
+ *   \--------------------/
  */
 struct arena_bin_info_s {
 	/* Size of regions in a run for this bin's size class. */
 	size_t			reg_size;
-
-	/* Redzone size. */
-	size_t			redzone_size;
-
-	/* Interval between regions (reg_size + (redzone_size << 1)). */
-	size_t			reg_interval;
 
 	/* Total size of a run for this bin's size class. */
 	size_t			run_size;
@@ -251,9 +226,6 @@ struct arena_bin_info_s {
 	 * bin.
 	 */
 	bitmap_info_t		bitmap_info;
-
-	/* Offset of first region in a run for this bin's size class. */
-	uint32_t		reg0_offset;
 };
 
 struct arena_bin_s {
@@ -278,7 +250,7 @@ struct arena_bin_s {
 	 * objects packed well, and it can also help reduce the number of
 	 * almost-empty chunks.
 	 */
-	ph_heap_t		runs;
+	arena_run_heap_t	runs;
 
 	/* Bin statistics. */
 	malloc_bin_stats_t	stats;
@@ -289,10 +261,18 @@ struct arena_s {
 	unsigned		ind;
 
 	/*
-	 * Number of threads currently assigned to this arena.  This field is
-	 * synchronized via atomic operations.
+	 * Number of threads currently assigned to this arena, synchronized via
+	 * atomic operations.  Each thread has two distinct assignments, one for
+	 * application-serving allocation, and the other for internal metadata
+	 * allocation.  Internal metadata must not be allocated from arenas
+	 * created via the arenas.extend mallctl, because the arena.<i>.reset
+	 * mallctl indiscriminately discards all allocations for the affected
+	 * arena.
+	 *
+	 *   0: Application allocation.
+	 *   1: Internal metadata allocation.
 	 */
-	unsigned		nthreads;
+	unsigned		nthreads[2];
 
 	/*
 	 * There are three classes of arena operations from a locking
@@ -320,6 +300,10 @@ struct arena_s {
 	uint64_t		offset_state;
 
 	dss_prec_t		dss_prec;
+
+
+	/* Extant arena chunks. */
+	ql_head(extent_t)	achunks;
 
 	/*
 	 * In order to avoid rapid chunk allocation/deallocation when an arena
@@ -361,25 +345,25 @@ struct arena_s {
 	 *        /-- arena ---\
 	 *        |            |
 	 *        |            |
-	 *        |------------|                             /- chunk -\
-	 *   ...->|chunks_cache|<--------------------------->|  /----\ |<--...
-	 *        |------------|                             |  |node| |
-	 *        |            |                             |  |    | |
-	 *        |            |    /- run -\    /- run -\   |  |    | |
-	 *        |            |    |       |    |       |   |  |    | |
-	 *        |            |    |       |    |       |   |  |    | |
-	 *        |------------|    |-------|    |-------|   |  |----| |
-	 *   ...->|runs_dirty  |<-->|rd     |<-->|rd     |<---->|rd  |<----...
-	 *        |------------|    |-------|    |-------|   |  |----| |
-	 *        |            |    |       |    |       |   |  |    | |
-	 *        |            |    |       |    |       |   |  \----/ |
-	 *        |            |    \-------/    \-------/   |         |
-	 *        |            |                             |         |
-	 *        |            |                             |         |
-	 *        \------------/                             \---------/
+	 *        |------------|                             /-- chunk --\
+	 *   ...->|chunks_cache|<--------------------------->|  /------\ |<--...
+	 *        |------------|                             |  |extent| |
+	 *        |            |                             |  |      | |
+	 *        |            |    /- run -\    /- run -\   |  |      | |
+	 *        |            |    |       |    |       |   |  |      | |
+	 *        |            |    |       |    |       |   |  |      | |
+	 *        |------------|    |-------|    |-------|   |  |------| |
+	 *   ...->|runs_dirty  |<-->|rd     |<-->|rd     |<---->|rd    |<----...
+	 *        |------------|    |-------|    |-------|   |  |------| |
+	 *        |            |    |       |    |       |   |  |      | |
+	 *        |            |    |       |    |       |   |  \------/ |
+	 *        |            |    \-------/    \-------/   |           |
+	 *        |            |                             |           |
+	 *        |            |                             |           |
+	 *        \------------/                             \-----------/
 	 */
 	arena_runs_dirty_link_t	runs_dirty;
-	extent_node_t		chunks_cache;
+	extent_t		chunks_cache;
 
 	/*
 	 * Approximate time in seconds from the creation of a set of unused
@@ -429,16 +413,16 @@ struct arena_s {
 	size_t			decay_backlog[SMOOTHSTEP_NSTEPS];
 
 	/* Extant huge allocations. */
-	ql_head(extent_node_t)	huge;
+	ql_head(extent_t)	huge;
 	/* Synchronizes all huge allocation/update/deallocation. */
 	malloc_mutex_t		huge_mtx;
 
 	/*
 	 * Trees of chunks that were previously allocated (trees differ only in
-	 * node ordering).  These are used when allocating chunks, in an attempt
-	 * to re-use address space.  Depending on function, different tree
-	 * orderings are needed, which is why there are two trees with the same
-	 * contents.
+	 * extent ordering).  These are used when allocating chunks, in an
+	 * attempt to re-use address space.  Depending on function, different
+	 * tree orderings are needed, which is why there are two trees with the
+	 * same contents.
 	 */
 	extent_tree_t		chunks_szad_cached;
 	extent_tree_t		chunks_ad_cached;
@@ -446,9 +430,9 @@ struct arena_s {
 	extent_tree_t		chunks_ad_retained;
 
 	malloc_mutex_t		chunks_mtx;
-	/* Cache of nodes that were allocated via base_alloc(). */
-	ql_head(extent_node_t)	node_cache;
-	malloc_mutex_t		node_cache_mtx;
+	/* Cache of extent structures that were allocated via base_alloc(). */
+	ql_head(extent_t)	extent_cache;
+	malloc_mutex_t		extent_cache_mtx;
 
 	/* User-configurable chunk hook functions. */
 	chunk_hooks_t		chunk_hooks;
@@ -457,10 +441,12 @@ struct arena_s {
 	arena_bin_t		bins[NBINS];
 
 	/*
-	 * Quantized address-ordered heaps of this arena's available runs.  The
-	 * heaps are used for first-best-fit run allocation.
+	 * Size-segregated address-ordered heaps of this arena's available runs,
+	 * used for first-best-fit run allocation.  Runs are quantized, i.e.
+	 * they reside in the last heap which corresponds to a size class less
+	 * than or equal to the run size.
 	 */
-	ph_heap_t		runs_avail[1]; /* Dynamically sized. */
+	arena_run_heap_t	runs_avail[NPSIZES];
 };
 
 /* Used in conjunction with tsd for fast arena-related context lookup. */
@@ -486,13 +472,12 @@ extern const char	*purge_mode_names[];
 extern ssize_t		opt_lg_dirty_mult;
 extern ssize_t		opt_decay_time;
 
-extern arena_bin_info_t	arena_bin_info[NBINS];
+extern const arena_bin_info_t	arena_bin_info[NBINS];
 
 extern size_t		map_bias; /* Number of arena chunk header pages. */
 extern size_t		map_misc_offset;
 extern size_t		arena_maxrun; /* Max run size for arenas. */
 extern size_t		large_maxclass; /* Max large size class. */
-extern size_t		run_quantize_max; /* Max run_quantize_*() input. */
 extern unsigned		nlclasses; /* Number of large size classes. */
 extern unsigned		nhclasses; /* Number of huge size classes. */
 
@@ -501,52 +486,52 @@ typedef size_t (run_quantize_t)(size_t);
 extern run_quantize_t *run_quantize_floor;
 extern run_quantize_t *run_quantize_ceil;
 #endif
-void	arena_chunk_cache_maybe_insert(arena_t *arena, extent_node_t *node,
+void	arena_chunk_cache_maybe_insert(arena_t *arena, extent_t *extent,
     bool cache);
-void	arena_chunk_cache_maybe_remove(arena_t *arena, extent_node_t *node,
+void	arena_chunk_cache_maybe_remove(arena_t *arena, extent_t *extent,
     bool cache);
-extent_node_t	*arena_node_alloc(arena_t *arena);
-void	arena_node_dalloc(arena_t *arena, extent_node_t *node);
-void	*arena_chunk_alloc_huge(arena_t *arena, size_t usize, size_t alignment,
-    bool *zero);
-void	arena_chunk_dalloc_huge(arena_t *arena, void *chunk, size_t usize);
-void	arena_chunk_ralloc_huge_similar(arena_t *arena, void *chunk,
-    size_t oldsize, size_t usize);
-void	arena_chunk_ralloc_huge_shrink(arena_t *arena, void *chunk,
-    size_t oldsize, size_t usize);
-bool	arena_chunk_ralloc_huge_expand(arena_t *arena, void *chunk,
-    size_t oldsize, size_t usize, bool *zero);
-ssize_t	arena_lg_dirty_mult_get(arena_t *arena);
-bool	arena_lg_dirty_mult_set(arena_t *arena, ssize_t lg_dirty_mult);
-ssize_t	arena_decay_time_get(arena_t *arena);
-bool	arena_decay_time_set(arena_t *arena, ssize_t decay_time);
-void	arena_maybe_purge(arena_t *arena);
-void	arena_purge(arena_t *arena, bool all);
-void	arena_tcache_fill_small(tsd_t *tsd, arena_t *arena, tcache_bin_t *tbin,
-    szind_t binind, uint64_t prof_accumbytes);
-void	arena_alloc_junk_small(void *ptr, arena_bin_info_t *bin_info,
+extent_t	*arena_extent_alloc(tsdn_t *tsdn, arena_t *arena);
+void	arena_extent_dalloc(tsdn_t *tsdn, arena_t *arena, extent_t *extent);
+void	*arena_chunk_alloc_huge(tsdn_t *tsdn, arena_t *arena, size_t usize,
+    size_t alignment, bool *zero);
+void	arena_chunk_dalloc_huge(tsdn_t *tsdn, arena_t *arena, void *chunk,
+    size_t usize);
+void	arena_chunk_ralloc_huge_similar(tsdn_t *tsdn, arena_t *arena,
+    void *chunk, size_t oldsize, size_t usize);
+void	arena_chunk_ralloc_huge_shrink(tsdn_t *tsdn, arena_t *arena,
+    void *chunk, size_t oldsize, size_t usize);
+bool	arena_chunk_ralloc_huge_expand(tsdn_t *tsdn, arena_t *arena,
+    void *chunk, size_t oldsize, size_t usize, bool *zero);
+ssize_t	arena_lg_dirty_mult_get(tsdn_t *tsdn, arena_t *arena);
+bool	arena_lg_dirty_mult_set(tsdn_t *tsdn, arena_t *arena,
+    ssize_t lg_dirty_mult);
+ssize_t	arena_decay_time_get(tsdn_t *tsdn, arena_t *arena);
+bool	arena_decay_time_set(tsdn_t *tsdn, arena_t *arena, ssize_t decay_time);
+void	arena_purge(tsdn_t *tsdn, arena_t *arena, bool all);
+void	arena_maybe_purge(tsdn_t *tsdn, arena_t *arena);
+void	arena_reset(tsd_t *tsd, arena_t *arena);
+void	arena_tcache_fill_small(tsdn_t *tsdn, arena_t *arena,
+    tcache_bin_t *tbin, szind_t binind, uint64_t prof_accumbytes);
+void	arena_alloc_junk_small(void *ptr, const arena_bin_info_t *bin_info,
     bool zero);
 #ifdef JEMALLOC_JET
-typedef void (arena_redzone_corruption_t)(void *, size_t, bool, size_t,
-    uint8_t);
-extern arena_redzone_corruption_t *arena_redzone_corruption;
-typedef void (arena_dalloc_junk_small_t)(void *, arena_bin_info_t *);
+typedef void (arena_dalloc_junk_small_t)(void *, const arena_bin_info_t *);
 extern arena_dalloc_junk_small_t *arena_dalloc_junk_small;
 #else
-void	arena_dalloc_junk_small(void *ptr, arena_bin_info_t *bin_info);
+void	arena_dalloc_junk_small(void *ptr, const arena_bin_info_t *bin_info);
 #endif
-void	arena_quarantine_junk_small(void *ptr, size_t usize);
-void	*arena_malloc_large(tsd_t *tsd, arena_t *arena, szind_t ind, bool zero);
-void	*arena_malloc_hard(tsd_t *tsd, arena_t *arena, size_t size, szind_t ind,
-    bool zero, tcache_t *tcache);
-void	*arena_palloc(tsd_t *tsd, arena_t *arena, size_t usize,
+void	*arena_malloc_large(tsdn_t *tsdn, arena_t *arena, szind_t ind,
+    bool zero);
+void	*arena_malloc_hard(tsdn_t *tsdn, arena_t *arena, size_t size,
+    szind_t ind, bool zero);
+void	*arena_palloc(tsdn_t *tsdn, arena_t *arena, size_t usize,
     size_t alignment, bool zero, tcache_t *tcache);
-void	arena_prof_promoted(const void *ptr, size_t size);
-void	arena_dalloc_bin_junked_locked(arena_t *arena, arena_chunk_t *chunk,
-    void *ptr, arena_chunk_map_bits_t *bitselm);
-void	arena_dalloc_bin(arena_t *arena, arena_chunk_t *chunk, void *ptr,
-    size_t pageind, arena_chunk_map_bits_t *bitselm);
-void	arena_dalloc_small(tsd_t *tsd, arena_t *arena, arena_chunk_t *chunk,
+void	arena_prof_promoted(tsdn_t *tsdn, const void *ptr, size_t size);
+void	arena_dalloc_bin_junked_locked(tsdn_t *tsdn, arena_t *arena,
+    arena_chunk_t *chunk, void *ptr, arena_chunk_map_bits_t *bitselm);
+void	arena_dalloc_bin(tsdn_t *tsdn, arena_t *arena, arena_chunk_t *chunk,
+    void *ptr, size_t pageind, arena_chunk_map_bits_t *bitselm);
+void	arena_dalloc_small(tsdn_t *tsdn, arena_t *arena, arena_chunk_t *chunk,
     void *ptr, size_t pageind);
 #ifdef JEMALLOC_JET
 typedef void (arena_dalloc_junk_large_t)(void *, size_t);
@@ -554,39 +539,43 @@ extern arena_dalloc_junk_large_t *arena_dalloc_junk_large;
 #else
 void	arena_dalloc_junk_large(void *ptr, size_t usize);
 #endif
-void	arena_dalloc_large_junked_locked(arena_t *arena, arena_chunk_t *chunk,
-    void *ptr);
-void	arena_dalloc_large(tsd_t *tsd, arena_t *arena, arena_chunk_t *chunk,
+void	arena_dalloc_large_junked_locked(tsdn_t *tsdn, arena_t *arena,
+    arena_chunk_t *chunk, void *ptr);
+void	arena_dalloc_large(tsdn_t *tsdn, arena_t *arena, arena_chunk_t *chunk,
     void *ptr);
 #ifdef JEMALLOC_JET
 typedef void (arena_ralloc_junk_large_t)(void *, size_t, size_t);
 extern arena_ralloc_junk_large_t *arena_ralloc_junk_large;
 #endif
-bool	arena_ralloc_no_move(tsd_t *tsd, void *ptr, size_t oldsize, size_t size,
-    size_t extra, bool zero);
-void	*arena_ralloc(tsd_t *tsd, arena_t *arena, void *ptr, size_t oldsize,
+bool	arena_ralloc_no_move(tsdn_t *tsdn, void *ptr, size_t oldsize,
+    size_t size, size_t extra, bool zero);
+void	*arena_ralloc(tsdn_t *tsdn, arena_t *arena, void *ptr, size_t oldsize,
     size_t size, size_t alignment, bool zero, tcache_t *tcache);
-dss_prec_t	arena_dss_prec_get(arena_t *arena);
-bool	arena_dss_prec_set(arena_t *arena, dss_prec_t dss_prec);
+dss_prec_t	arena_dss_prec_get(tsdn_t *tsdn, arena_t *arena);
+bool	arena_dss_prec_set(tsdn_t *tsdn, arena_t *arena, dss_prec_t dss_prec);
 ssize_t	arena_lg_dirty_mult_default_get(void);
 bool	arena_lg_dirty_mult_default_set(ssize_t lg_dirty_mult);
 ssize_t	arena_decay_time_default_get(void);
 bool	arena_decay_time_default_set(ssize_t decay_time);
-void	arena_basic_stats_merge(arena_t *arena, unsigned *nthreads,
+void	arena_basic_stats_merge(tsdn_t *tsdn, arena_t *arena,
+    unsigned *nthreads, const char **dss, ssize_t *lg_dirty_mult,
+    ssize_t *decay_time, size_t *nactive, size_t *ndirty);
+void	arena_stats_merge(tsdn_t *tsdn, arena_t *arena, unsigned *nthreads,
     const char **dss, ssize_t *lg_dirty_mult, ssize_t *decay_time,
-    size_t *nactive, size_t *ndirty);
-void	arena_stats_merge(arena_t *arena, unsigned *nthreads, const char **dss,
-    ssize_t *lg_dirty_mult, ssize_t *decay_time, size_t *nactive,
-    size_t *ndirty, arena_stats_t *astats, malloc_bin_stats_t *bstats,
-    malloc_large_stats_t *lstats, malloc_huge_stats_t *hstats);
-unsigned	arena_nthreads_get(arena_t *arena);
-void	arena_nthreads_inc(arena_t *arena);
-void	arena_nthreads_dec(arena_t *arena);
-arena_t	*arena_new(unsigned ind);
-bool	arena_boot(void);
-void	arena_prefork(arena_t *arena);
-void	arena_postfork_parent(arena_t *arena);
-void	arena_postfork_child(arena_t *arena);
+    size_t *nactive, size_t *ndirty, arena_stats_t *astats,
+    malloc_bin_stats_t *bstats, malloc_large_stats_t *lstats,
+    malloc_huge_stats_t *hstats);
+unsigned	arena_nthreads_get(arena_t *arena, bool internal);
+void	arena_nthreads_inc(arena_t *arena, bool internal);
+void	arena_nthreads_dec(arena_t *arena, bool internal);
+arena_t	*arena_new(tsdn_t *tsdn, unsigned ind);
+void	arena_boot(void);
+void	arena_prefork0(tsdn_t *tsdn, arena_t *arena);
+void	arena_prefork1(tsdn_t *tsdn, arena_t *arena);
+void	arena_prefork2(tsdn_t *tsdn, arena_t *arena);
+void	arena_prefork3(tsdn_t *tsdn, arena_t *arena);
+void	arena_postfork_parent(tsdn_t *tsdn, arena_t *arena);
+void	arena_postfork_child(tsdn_t *tsdn, arena_t *arena);
 
 #endif /* JEMALLOC_H_EXTERNS */
 /******************************************************************************/
@@ -604,7 +593,6 @@ const arena_chunk_map_misc_t	*arena_miscelm_get_const(
 size_t	arena_miscelm_to_pageind(const arena_chunk_map_misc_t *miscelm);
 void	*arena_miscelm_to_rpages(const arena_chunk_map_misc_t *miscelm);
 arena_chunk_map_misc_t	*arena_rd_to_miscelm(arena_runs_dirty_link_t *rd);
-arena_chunk_map_misc_t	*arena_ph_to_miscelm(ph_node_t *ph);
 arena_chunk_map_misc_t	*arena_run_to_miscelm(arena_run_t *run);
 size_t	*arena_mapbitsp_get_mutable(arena_chunk_t *chunk, size_t pageind);
 const size_t	*arena_mapbitsp_get_const(const arena_chunk_t *chunk,
@@ -644,23 +632,25 @@ void	arena_metadata_allocated_sub(arena_t *arena, size_t size);
 size_t	arena_metadata_allocated_get(arena_t *arena);
 bool	arena_prof_accum_impl(arena_t *arena, uint64_t accumbytes);
 bool	arena_prof_accum_locked(arena_t *arena, uint64_t accumbytes);
-bool	arena_prof_accum(arena_t *arena, uint64_t accumbytes);
+bool	arena_prof_accum(tsdn_t *tsdn, arena_t *arena, uint64_t accumbytes);
 szind_t	arena_ptr_small_binind_get(const void *ptr, size_t mapbits);
 szind_t	arena_bin_index(arena_t *arena, arena_bin_t *bin);
-size_t	arena_run_regind(arena_run_t *run, arena_bin_info_t *bin_info,
+size_t	arena_run_regind(arena_run_t *run, const arena_bin_info_t *bin_info,
     const void *ptr);
-prof_tctx_t	*arena_prof_tctx_get(const void *ptr);
-void	arena_prof_tctx_set(const void *ptr, size_t usize, prof_tctx_t *tctx);
-void	arena_prof_tctx_reset(const void *ptr, size_t usize,
+prof_tctx_t	*arena_prof_tctx_get(tsdn_t *tsdn, const void *ptr);
+void	arena_prof_tctx_set(tsdn_t *tsdn, const void *ptr, size_t usize,
+    prof_tctx_t *tctx);
+void	arena_prof_tctx_reset(tsdn_t *tsdn, const void *ptr, size_t usize,
     const void *old_ptr, prof_tctx_t *old_tctx);
-void	arena_decay_ticks(tsd_t *tsd, arena_t *arena, unsigned nticks);
-void	arena_decay_tick(tsd_t *tsd, arena_t *arena);
-void	*arena_malloc(tsd_t *tsd, arena_t *arena, size_t size, szind_t ind,
+void	arena_decay_ticks(tsdn_t *tsdn, arena_t *arena, unsigned nticks);
+void	arena_decay_tick(tsdn_t *tsdn, arena_t *arena);
+void	*arena_malloc(tsdn_t *tsdn, arena_t *arena, size_t size, szind_t ind,
     bool zero, tcache_t *tcache, bool slow_path);
 arena_t	*arena_aalloc(const void *ptr);
-size_t	arena_salloc(const void *ptr, bool demote);
-void	arena_dalloc(tsd_t *tsd, void *ptr, tcache_t *tcache, bool slow_path);
-void	arena_sdalloc(tsd_t *tsd, void *ptr, size_t size, tcache_t *tcache);
+size_t	arena_salloc(tsdn_t *tsdn, const void *ptr, bool demote);
+void	arena_dalloc(tsdn_t *tsdn, void *ptr, tcache_t *tcache, bool slow_path);
+void	arena_sdalloc(tsdn_t *tsdn, void *ptr, size_t size, tcache_t *tcache,
+    bool slow_path);
 #endif
 
 #if (defined(JEMALLOC_ENABLE_INLINE) || defined(JEMALLOC_ARENA_C_))
@@ -727,18 +717,6 @@ arena_rd_to_miscelm(arena_runs_dirty_link_t *rd)
 {
 	arena_chunk_map_misc_t *miscelm = (arena_chunk_map_misc_t
 	    *)((uintptr_t)rd - offsetof(arena_chunk_map_misc_t, rd));
-
-	assert(arena_miscelm_to_pageind(miscelm) >= map_bias);
-	assert(arena_miscelm_to_pageind(miscelm) < chunk_npages);
-
-	return (miscelm);
-}
-
-JEMALLOC_ALWAYS_INLINE arena_chunk_map_misc_t *
-arena_ph_to_miscelm(ph_node_t *ph)
-{
-	arena_chunk_map_misc_t *miscelm = (arena_chunk_map_misc_t *)
-	    ((uintptr_t)ph - offsetof(arena_chunk_map_misc_t, ph_link));
 
 	assert(arena_miscelm_to_pageind(miscelm) >= map_bias);
 	assert(arena_miscelm_to_pageind(miscelm) < chunk_npages);
@@ -1047,7 +1025,7 @@ arena_prof_accum_locked(arena_t *arena, uint64_t accumbytes)
 }
 
 JEMALLOC_INLINE bool
-arena_prof_accum(arena_t *arena, uint64_t accumbytes)
+arena_prof_accum(tsdn_t *tsdn, arena_t *arena, uint64_t accumbytes)
 {
 
 	cassert(config_prof);
@@ -1058,9 +1036,9 @@ arena_prof_accum(arena_t *arena, uint64_t accumbytes)
 	{
 		bool ret;
 
-		malloc_mutex_lock(&arena->lock);
+		malloc_mutex_lock(tsdn, &arena->lock);
 		ret = arena_prof_accum_impl(arena, accumbytes);
-		malloc_mutex_unlock(&arena->lock);
+		malloc_mutex_unlock(tsdn, &arena->lock);
 		return (ret);
 	}
 }
@@ -1081,14 +1059,14 @@ arena_ptr_small_binind_get(const void *ptr, size_t mapbits)
 		const arena_run_t *run;
 		arena_bin_t *bin;
 		szind_t run_binind, actual_binind;
-		arena_bin_info_t *bin_info;
+		const arena_bin_info_t *bin_info;
 		const arena_chunk_map_misc_t *miscelm;
 		const void *rpages;
 
 		assert(binind != BININD_INVALID);
 		assert(binind < NBINS);
 		chunk = (arena_chunk_t *)CHUNK_ADDR2BASE(ptr);
-		arena = extent_node_arena_get(&chunk->node);
+		arena = extent_arena_get(&chunk->extent);
 		pageind = ((uintptr_t)ptr - (uintptr_t)chunk) >> LG_PAGE;
 		actual_mapbits = arena_mapbits_get(chunk, pageind);
 		assert(mapbits == actual_mapbits);
@@ -1104,8 +1082,7 @@ arena_ptr_small_binind_get(const void *ptr, size_t mapbits)
 		assert(run_binind == actual_binind);
 		bin_info = &arena_bin_info[actual_binind];
 		rpages = arena_miscelm_to_rpages(miscelm);
-		assert(((uintptr_t)ptr - ((uintptr_t)rpages +
-		    (uintptr_t)bin_info->reg0_offset)) % bin_info->reg_interval
+		assert(((uintptr_t)ptr - (uintptr_t)rpages) % bin_info->reg_size
 		    == 0);
 	}
 
@@ -1123,7 +1100,8 @@ arena_bin_index(arena_t *arena, arena_bin_t *bin)
 }
 
 JEMALLOC_INLINE size_t
-arena_run_regind(arena_run_t *run, arena_bin_info_t *bin_info, const void *ptr)
+arena_run_regind(arena_run_t *run, const arena_bin_info_t *bin_info,
+    const void *ptr)
 {
 	size_t diff, interval, shift, regind;
 	arena_chunk_map_misc_t *miscelm = arena_run_to_miscelm(run);
@@ -1133,18 +1111,16 @@ arena_run_regind(arena_run_t *run, arena_bin_info_t *bin_info, const void *ptr)
 	 * Freeing a pointer lower than region zero can cause assertion
 	 * failure.
 	 */
-	assert((uintptr_t)ptr >= (uintptr_t)rpages +
-	    (uintptr_t)bin_info->reg0_offset);
+	assert((uintptr_t)ptr >= (uintptr_t)rpages);
 
 	/*
 	 * Avoid doing division with a variable divisor if possible.  Using
 	 * actual division here can reduce allocator throughput by over 20%!
 	 */
-	diff = (size_t)((uintptr_t)ptr - (uintptr_t)rpages -
-	    bin_info->reg0_offset);
+	diff = (size_t)((uintptr_t)ptr - (uintptr_t)rpages);
 
 	/* Rescale (factor powers of 2 out of the numerator and denominator). */
-	interval = bin_info->reg_interval;
+	interval = bin_info->reg_size;
 	shift = ffs_zu(interval) - 1;
 	diff >>= shift;
 	interval >>= shift;
@@ -1196,7 +1172,7 @@ arena_run_regind(arena_run_t *run, arena_bin_info_t *bin_info, const void *ptr)
 }
 
 JEMALLOC_INLINE prof_tctx_t *
-arena_prof_tctx_get(const void *ptr)
+arena_prof_tctx_get(tsdn_t *tsdn, const void *ptr)
 {
 	prof_tctx_t *ret;
 	arena_chunk_t *chunk;
@@ -1217,13 +1193,14 @@ arena_prof_tctx_get(const void *ptr)
 			ret = atomic_read_p(&elm->prof_tctx_pun);
 		}
 	} else
-		ret = huge_prof_tctx_get(ptr);
+		ret = huge_prof_tctx_get(tsdn, ptr);
 
 	return (ret);
 }
 
 JEMALLOC_INLINE void
-arena_prof_tctx_set(const void *ptr, size_t usize, prof_tctx_t *tctx)
+arena_prof_tctx_set(tsdn_t *tsdn, const void *ptr, size_t usize,
+    prof_tctx_t *tctx)
 {
 	arena_chunk_t *chunk;
 
@@ -1254,12 +1231,12 @@ arena_prof_tctx_set(const void *ptr, size_t usize, prof_tctx_t *tctx)
 			assert(arena_mapbits_large_get(chunk, pageind) == 0);
 		}
 	} else
-		huge_prof_tctx_set(ptr, tctx);
+		huge_prof_tctx_set(tsdn, ptr, tctx);
 }
 
 JEMALLOC_INLINE void
-arena_prof_tctx_reset(const void *ptr, size_t usize, const void *old_ptr,
-    prof_tctx_t *old_tctx)
+arena_prof_tctx_reset(tsdn_t *tsdn, const void *ptr, size_t usize,
+    const void *old_ptr, prof_tctx_t *old_tctx)
 {
 
 	cassert(config_prof);
@@ -1282,52 +1259,55 @@ arena_prof_tctx_reset(const void *ptr, size_t usize, const void *old_ptr,
 			atomic_write_p(&elm->prof_tctx_pun,
 			    (prof_tctx_t *)(uintptr_t)1U);
 		} else
-			huge_prof_tctx_reset(ptr);
+			huge_prof_tctx_reset(tsdn, ptr);
 	}
 }
 
 JEMALLOC_ALWAYS_INLINE void
-arena_decay_ticks(tsd_t *tsd, arena_t *arena, unsigned nticks)
+arena_decay_ticks(tsdn_t *tsdn, arena_t *arena, unsigned nticks)
 {
+	tsd_t *tsd;
 	ticker_t *decay_ticker;
 
-	if (unlikely(tsd == NULL))
+	if (unlikely(tsdn_null(tsdn)))
 		return;
+	tsd = tsdn_tsd(tsdn);
 	decay_ticker = decay_ticker_get(tsd, arena->ind);
 	if (unlikely(decay_ticker == NULL))
 		return;
 	if (unlikely(ticker_ticks(decay_ticker, nticks)))
-		arena_purge(arena, false);
+		arena_purge(tsdn, arena, false);
 }
 
 JEMALLOC_ALWAYS_INLINE void
-arena_decay_tick(tsd_t *tsd, arena_t *arena)
+arena_decay_tick(tsdn_t *tsdn, arena_t *arena)
 {
 
-	arena_decay_ticks(tsd, arena, 1);
+	arena_decay_ticks(tsdn, arena, 1);
 }
 
 JEMALLOC_ALWAYS_INLINE void *
-arena_malloc(tsd_t *tsd, arena_t *arena, size_t size, szind_t ind, bool zero,
+arena_malloc(tsdn_t *tsdn, arena_t *arena, size_t size, szind_t ind, bool zero,
     tcache_t *tcache, bool slow_path)
 {
 
+	assert(!tsdn_null(tsdn) || tcache == NULL);
 	assert(size != 0);
 
 	if (likely(tcache != NULL)) {
 		if (likely(size <= SMALL_MAXCLASS)) {
-			return (tcache_alloc_small(tsd, arena, tcache, size,
-			    ind, zero, slow_path));
+			return (tcache_alloc_small(tsdn_tsd(tsdn), arena,
+			    tcache, size, ind, zero, slow_path));
 		}
 		if (likely(size <= tcache_maxclass)) {
-			return (tcache_alloc_large(tsd, arena, tcache, size,
-			    ind, zero, slow_path));
+			return (tcache_alloc_large(tsdn_tsd(tsdn), arena,
+			    tcache, size, ind, zero, slow_path));
 		}
 		/* (size > tcache_maxclass) case falls through. */
 		assert(size > tcache_maxclass);
 	}
 
-	return (arena_malloc_hard(tsd, arena, size, ind, zero, tcache));
+	return (arena_malloc_hard(tsdn, arena, size, ind, zero));
 }
 
 JEMALLOC_ALWAYS_INLINE arena_t *
@@ -1337,14 +1317,14 @@ arena_aalloc(const void *ptr)
 
 	chunk = (arena_chunk_t *)CHUNK_ADDR2BASE(ptr);
 	if (likely(chunk != ptr))
-		return (extent_node_arena_get(&chunk->node));
+		return (extent_arena_get(&chunk->extent));
 	else
 		return (huge_aalloc(ptr));
 }
 
 /* Return the size of the allocation pointed to by ptr. */
 JEMALLOC_ALWAYS_INLINE size_t
-arena_salloc(const void *ptr, bool demote)
+arena_salloc(tsdn_t *tsdn, const void *ptr, bool demote)
 {
 	size_t ret;
 	arena_chunk_t *chunk;
@@ -1387,17 +1367,18 @@ arena_salloc(const void *ptr, bool demote)
 			ret = index2size(binind);
 		}
 	} else
-		ret = huge_salloc(ptr);
+		ret = huge_salloc(tsdn, ptr);
 
 	return (ret);
 }
 
 JEMALLOC_ALWAYS_INLINE void
-arena_dalloc(tsd_t *tsd, void *ptr, tcache_t *tcache, bool slow_path)
+arena_dalloc(tsdn_t *tsdn, void *ptr, tcache_t *tcache, bool slow_path)
 {
 	arena_chunk_t *chunk;
 	size_t pageind, mapbits;
 
+	assert(!tsdn_null(tsdn) || tcache == NULL);
 	assert(ptr != NULL);
 
 	chunk = (arena_chunk_t *)CHUNK_ADDR2BASE(ptr);
@@ -1410,11 +1391,12 @@ arena_dalloc(tsd_t *tsd, void *ptr, tcache_t *tcache, bool slow_path)
 			if (likely(tcache != NULL)) {
 				szind_t binind = arena_ptr_small_binind_get(ptr,
 				    mapbits);
-				tcache_dalloc_small(tsd, tcache, ptr, binind,
-				    slow_path);
+				tcache_dalloc_small(tsdn_tsd(tsdn), tcache, ptr,
+				    binind, slow_path);
 			} else {
-				arena_dalloc_small(tsd, extent_node_arena_get(
-				    &chunk->node), chunk, ptr, pageind);
+				arena_dalloc_small(tsdn,
+				    extent_arena_get(&chunk->extent), chunk,
+				    ptr, pageind);
 			}
 		} else {
 			size_t size = arena_mapbits_large_size_get(chunk,
@@ -1425,21 +1407,25 @@ arena_dalloc(tsd_t *tsd, void *ptr, tcache_t *tcache, bool slow_path)
 
 			if (likely(tcache != NULL) && size - large_pad <=
 			    tcache_maxclass) {
-				tcache_dalloc_large(tsd, tcache, ptr, size -
-				    large_pad, slow_path);
+				tcache_dalloc_large(tsdn_tsd(tsdn), tcache, ptr,
+				    size - large_pad, slow_path);
 			} else {
-				arena_dalloc_large(tsd, extent_node_arena_get(
-				    &chunk->node), chunk, ptr);
+				arena_dalloc_large(tsdn,
+				    extent_arena_get(&chunk->extent), chunk,
+				    ptr);
 			}
 		}
 	} else
-		huge_dalloc(tsd, ptr, tcache);
+		huge_dalloc(tsdn, ptr);
 }
 
 JEMALLOC_ALWAYS_INLINE void
-arena_sdalloc(tsd_t *tsd, void *ptr, size_t size, tcache_t *tcache)
+arena_sdalloc(tsdn_t *tsdn, void *ptr, size_t size, tcache_t *tcache,
+    bool slow_path)
 {
 	arena_chunk_t *chunk;
+
+	assert(!tsdn_null(tsdn) || tcache == NULL);
 
 	chunk = (arena_chunk_t *)CHUNK_ADDR2BASE(ptr);
 	if (likely(chunk != ptr)) {
@@ -1457,34 +1443,36 @@ arena_sdalloc(tsd_t *tsd, void *ptr, size_t size, tcache_t *tcache)
 				    pageind) - large_pad;
 			}
 		}
-		assert(s2u(size) == s2u(arena_salloc(ptr, false)));
+		assert(s2u(size) == s2u(arena_salloc(tsdn, ptr, false)));
 
 		if (likely(size <= SMALL_MAXCLASS)) {
 			/* Small allocation. */
 			if (likely(tcache != NULL)) {
 				szind_t binind = size2index(size);
-				tcache_dalloc_small(tsd, tcache, ptr, binind,
-				    true);
+				tcache_dalloc_small(tsdn_tsd(tsdn), tcache, ptr,
+				    binind, slow_path);
 			} else {
 				size_t pageind = ((uintptr_t)ptr -
 				    (uintptr_t)chunk) >> LG_PAGE;
-				arena_dalloc_small(tsd, extent_node_arena_get(
-				    &chunk->node), chunk, ptr, pageind);
+				arena_dalloc_small(tsdn,
+				    extent_arena_get(&chunk->extent), chunk,
+				    ptr, pageind);
 			}
 		} else {
 			assert(config_cache_oblivious || ((uintptr_t)ptr &
 			    PAGE_MASK) == 0);
 
 			if (likely(tcache != NULL) && size <= tcache_maxclass) {
-				tcache_dalloc_large(tsd, tcache, ptr, size,
-				    true);
+				tcache_dalloc_large(tsdn_tsd(tsdn), tcache, ptr,
+				    size, slow_path);
 			} else {
-				arena_dalloc_large(tsd, extent_node_arena_get(
-				    &chunk->node), chunk, ptr);
+				arena_dalloc_large(tsdn,
+				    extent_arena_get(&chunk->extent), chunk,
+				    ptr);
 			}
 		}
 	} else
-		huge_dalloc(tsd, ptr, tcache);
+		huge_dalloc(tsdn, ptr);
 }
 #  endif /* JEMALLOC_ARENA_INLINE_B */
 #endif

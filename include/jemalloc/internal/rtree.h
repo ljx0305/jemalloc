@@ -15,35 +15,10 @@ typedef struct rtree_s rtree_t;
  * machine address width.
  */
 #define	LG_RTREE_BITS_PER_LEVEL	4
-#define	RTREE_BITS_PER_LEVEL	(ZU(1) << LG_RTREE_BITS_PER_LEVEL)
-/*
- * Avoid math in RTREE_HEIGHT_MAX definition so that it can be used in cpp
- * conditionals.  The following defininitions are precomputed equivalents to:
- *
- *  #define	RTREE_HEIGHT_MAX					\
- *      ((ZU(1) << (LG_SIZEOF_PTR+3)) / RTREE_BITS_PER_LEVEL)
- */
-#if LG_RTREE_BITS_PER_LEVEL == 2
-#  if LG_SIZEOF_PTR == 3
-#    define RTREE_HEIGHT_MAX	16
-#  elif LG_SIZEOF_PTR == 2
-#    define RTREE_HEIGHT_MAX	8
-#  endif
-#elif LG_RTREE_BITS_PER_LEVEL == 3
-#  if LG_SIZEOF_PTR == 3
-#    define RTREE_HEIGHT_MAX	8
-#  elif LG_SIZEOF_PTR == 2
-#    define RTREE_HEIGHT_MAX	4
-#  endif
-#elif LG_RTREE_BITS_PER_LEVEL == 4
-#  if LG_SIZEOF_PTR == 3
-#    define RTREE_HEIGHT_MAX	4
-#  elif LG_SIZEOF_PTR == 2
-#    define RTREE_HEIGHT_MAX	2
-#  endif
-#else
-#  error Unsupported LG_RTREE_BITS_PER_LEVEL
-#endif
+#define	RTREE_BITS_PER_LEVEL	(1U << LG_RTREE_BITS_PER_LEVEL)
+/* Maximum rtree height. */
+#define	RTREE_HEIGHT_MAX						\
+    ((1U << (LG_SIZEOF_PTR+3)) / RTREE_BITS_PER_LEVEL)
 
 /* Used for two-stage lock-free node initialization. */
 #define	RTREE_NODE_INITIALIZING	((rtree_node_elm_t *)0x1)
@@ -64,7 +39,7 @@ struct rtree_node_elm_s {
 	union {
 		void			*pun;
 		rtree_node_elm_t	*child;
-		extent_node_t		*val;
+		extent_t		*val;
 	};
 };
 
@@ -141,17 +116,17 @@ rtree_node_elm_t	*rtree_child_tryread(rtree_node_elm_t *elm,
     bool dependent);
 rtree_node_elm_t	*rtree_child_read(rtree_t *rtree, rtree_node_elm_t *elm,
     unsigned level, bool dependent);
-extent_node_t	*rtree_val_read(rtree_t *rtree, rtree_node_elm_t *elm,
+extent_t	*rtree_val_read(rtree_t *rtree, rtree_node_elm_t *elm,
     bool dependent);
 void	rtree_val_write(rtree_t *rtree, rtree_node_elm_t *elm,
-    const extent_node_t *val);
+    const extent_t *val);
 rtree_node_elm_t	*rtree_subtree_tryread(rtree_t *rtree, unsigned level,
     bool dependent);
 rtree_node_elm_t	*rtree_subtree_read(rtree_t *rtree, unsigned level,
     bool dependent);
 
-extent_node_t	*rtree_get(rtree_t *rtree, uintptr_t key, bool dependent);
-bool	rtree_set(rtree_t *rtree, uintptr_t key, const extent_node_t *val);
+extent_t	*rtree_get(rtree_t *rtree, uintptr_t key, bool dependent);
+bool	rtree_set(rtree_t *rtree, uintptr_t key, const extent_t *val);
 #endif
 
 #if (defined(JEMALLOC_ENABLE_INLINE) || defined(JEMALLOC_RTREE_C_))
@@ -211,7 +186,7 @@ rtree_child_read(rtree_t *rtree, rtree_node_elm_t *elm, unsigned level,
 	return (child);
 }
 
-JEMALLOC_ALWAYS_INLINE extent_node_t *
+JEMALLOC_ALWAYS_INLINE extent_t *
 rtree_val_read(rtree_t *rtree, rtree_node_elm_t *elm, bool dependent)
 {
 
@@ -234,7 +209,7 @@ rtree_val_read(rtree_t *rtree, rtree_node_elm_t *elm, bool dependent)
 }
 
 JEMALLOC_INLINE void
-rtree_val_write(rtree_t *rtree, rtree_node_elm_t *elm, const extent_node_t *val)
+rtree_val_write(rtree_t *rtree, rtree_node_elm_t *elm, const extent_t *val)
 {
 
 	atomic_write_p(&elm->pun, val);
@@ -265,7 +240,7 @@ rtree_subtree_read(rtree_t *rtree, unsigned level, bool dependent)
 	return (subtree);
 }
 
-JEMALLOC_ALWAYS_INLINE extent_node_t *
+JEMALLOC_ALWAYS_INLINE extent_t *
 rtree_get(rtree_t *rtree, uintptr_t key, bool dependent)
 {
 	uintptr_t subkey;
@@ -357,7 +332,7 @@ rtree_get(rtree_t *rtree, uintptr_t key, bool dependent)
 }
 
 JEMALLOC_INLINE bool
-rtree_set(rtree_t *rtree, uintptr_t key, const extent_node_t *val)
+rtree_set(rtree_t *rtree, uintptr_t key, const extent_t *val)
 {
 	uintptr_t subkey;
 	unsigned i, start_level;
