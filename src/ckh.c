@@ -99,7 +99,8 @@ ckh_try_bucket_insert(ckh_t *ckh, size_t bucket, const void *key,
 	 * Cycle through the cells in the bucket, starting at a random position.
 	 * The randomness avoids worst-case search overhead as buckets fill up.
 	 */
-	offset = (unsigned)prng_lg_range(&ckh->prng_state, LG_CKH_BUCKET_CELLS);
+	offset = (unsigned)prng_lg_range(&ckh->prng_state, LG_CKH_BUCKET_CELLS,
+	    false);
 	for (i = 0; i < (ZU(1) << LG_CKH_BUCKET_CELLS); i++) {
 		cell = &ckh->tab[(bucket << LG_CKH_BUCKET_CELLS) +
 		    ((i + offset) & ((ZU(1) << LG_CKH_BUCKET_CELLS) - 1))];
@@ -142,7 +143,7 @@ ckh_evict_reloc_insert(ckh_t *ckh, size_t argbucket, void const **argkey,
 		 * bucket.
 		 */
 		i = (unsigned)prng_lg_range(&ckh->prng_state,
-		    LG_CKH_BUCKET_CELLS);
+		    LG_CKH_BUCKET_CELLS, false);
 		cell = &ckh->tab[(bucket << LG_CKH_BUCKET_CELLS) + i];
 		assert(cell->key != NULL);
 
@@ -266,7 +267,7 @@ ckh_grow(tsdn_t *tsdn, ckh_t *ckh)
 
 		lg_curcells++;
 		usize = sa2u(sizeof(ckhc_t) << lg_curcells, CACHELINE);
-		if (unlikely(usize == 0 || usize > HUGE_MAXCLASS)) {
+		if (unlikely(usize == 0 || usize > LARGE_MAXCLASS)) {
 			ret = true;
 			goto label_return;
 		}
@@ -283,12 +284,14 @@ ckh_grow(tsdn_t *tsdn, ckh_t *ckh)
 		ckh->lg_curbuckets = lg_curcells - LG_CKH_BUCKET_CELLS;
 
 		if (!ckh_rebuild(ckh, tab)) {
-			idalloctm(tsdn, tab, NULL, true, true);
+			idalloctm(tsdn, iealloc(tsdn, tab), tab, NULL, true,
+			    true);
 			break;
 		}
 
 		/* Rebuilding failed, so back out partially rebuilt table. */
-		idalloctm(tsdn, ckh->tab, NULL, true, true);
+		idalloctm(tsdn, iealloc(tsdn, ckh->tab), ckh->tab, NULL, true,
+		    true);
 		ckh->tab = tab;
 		ckh->lg_curbuckets = lg_prevbuckets;
 	}
@@ -312,7 +315,7 @@ ckh_shrink(tsdn_t *tsdn, ckh_t *ckh)
 	lg_prevbuckets = ckh->lg_curbuckets;
 	lg_curcells = ckh->lg_curbuckets + LG_CKH_BUCKET_CELLS - 1;
 	usize = sa2u(sizeof(ckhc_t) << lg_curcells, CACHELINE);
-	if (unlikely(usize == 0 || usize > HUGE_MAXCLASS))
+	if (unlikely(usize == 0 || usize > LARGE_MAXCLASS))
 		return;
 	tab = (ckhc_t *)ipallocztm(tsdn, usize, CACHELINE, true, NULL, true,
 	    arena_ichoose(tsdn, NULL));
@@ -330,7 +333,7 @@ ckh_shrink(tsdn_t *tsdn, ckh_t *ckh)
 	ckh->lg_curbuckets = lg_curcells - LG_CKH_BUCKET_CELLS;
 
 	if (!ckh_rebuild(ckh, tab)) {
-		idalloctm(tsdn, tab, NULL, true, true);
+		idalloctm(tsdn, iealloc(tsdn, tab), tab, NULL, true, true);
 #ifdef CKH_COUNT
 		ckh->nshrinks++;
 #endif
@@ -338,7 +341,7 @@ ckh_shrink(tsdn_t *tsdn, ckh_t *ckh)
 	}
 
 	/* Rebuilding failed, so back out partially rebuilt table. */
-	idalloctm(tsdn, ckh->tab, NULL, true, true);
+	idalloctm(tsdn, iealloc(tsdn, ckh->tab), ckh->tab, NULL, true, true);
 	ckh->tab = tab;
 	ckh->lg_curbuckets = lg_prevbuckets;
 #ifdef CKH_COUNT
@@ -387,7 +390,7 @@ ckh_new(tsdn_t *tsdn, ckh_t *ckh, size_t minitems, ckh_hash_t *hash,
 	ckh->keycomp = keycomp;
 
 	usize = sa2u(sizeof(ckhc_t) << lg_mincells, CACHELINE);
-	if (unlikely(usize == 0 || usize > HUGE_MAXCLASS)) {
+	if (unlikely(usize == 0 || usize > LARGE_MAXCLASS)) {
 		ret = true;
 		goto label_return;
 	}
@@ -421,7 +424,7 @@ ckh_delete(tsdn_t *tsdn, ckh_t *ckh)
 	    (unsigned long long)ckh->nrelocs);
 #endif
 
-	idalloctm(tsdn, ckh->tab, NULL, true, true);
+	idalloctm(tsdn, iealloc(tsdn, ckh->tab), ckh->tab, NULL, true, true);
 	if (config_debug)
 		memset(ckh, JEMALLOC_FREE_JUNK, sizeof(ckh_t));
 }

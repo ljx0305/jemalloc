@@ -3,12 +3,13 @@
 
 void
 witness_init(witness_t *witness, const char *name, witness_rank_t rank,
-    witness_comp_t *comp)
+    witness_comp_t *comp, void *opaque)
 {
 
 	witness->name = name;
 	witness->rank = rank;
 	witness->comp = comp;
+	witness->opaque = opaque;
 }
 
 #ifdef JEMALLOC_JET
@@ -98,13 +99,6 @@ witnesses_cleanup(tsd_t *tsd)
 {
 
 	witness_assert_lockless(tsd_tsdn(tsd));
-
-	/* Do nothing. */
-}
-
-void
-witness_fork_cleanup(tsd_t *tsd)
-{
 
 	/* Do nothing. */
 }

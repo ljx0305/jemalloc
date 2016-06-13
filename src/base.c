@@ -5,7 +5,7 @@
 /* Data. */
 
 static malloc_mutex_t	base_mtx;
-static extent_tree_t	base_avail_szad;
+static extent_heap_t	base_avail[NSIZES];
 static extent_t		*base_extents;
 static size_t		base_allocated;
 static size_t		base_resident;
@@ -38,7 +38,7 @@ base_extent_dalloc(tsdn_t *tsdn, extent_t *extent)
 }
 
 static extent_t *
-base_chunk_alloc(tsdn_t *tsdn, size_t minsize)
+base_extent_alloc(tsdn_t *tsdn, size_t minsize)
 {
 	extent_t *extent;
 	size_t csize, nsize;
@@ -50,7 +50,15 @@ base_chunk_alloc(tsdn_t *tsdn, size_t minsize)
 	/* Allocate enough space to also carve an extent out if necessary. */
 	nsize = (extent == NULL) ? CACHELINE_CEILING(sizeof(extent_t)) : 0;
 	csize = CHUNK_CEILING(minsize + nsize);
-	addr = chunk_alloc_base(csize);
+	/*
+	 * Directly call extent_alloc_mmap() because it's critical to allocate
+	 * untouched demand-zeroed virtual memory.
+	 */
+	{
+		bool zero = true;
+		bool commit = true;
+		addr = extent_alloc_mmap(NULL, csize, PAGE, &zero, &commit);
+	}
 	if (addr == NULL) {
 		if (extent != NULL)
 			base_extent_dalloc(tsdn, extent);
@@ -66,7 +74,7 @@ base_chunk_alloc(tsdn_t *tsdn, size_t minsize)
 			base_resident += PAGE_CEILING(nsize);
 		}
 	}
-	extent_init(extent, NULL, addr, csize, true, true);
+	extent_init(extent, NULL, addr, csize, 0, true, true, true, false);
 	return (extent);
 }
 
@@ -79,9 +87,9 @@ void *
 base_alloc(tsdn_t *tsdn, size_t size)
 {
 	void *ret;
-	size_t csize, usize;
+	size_t csize;
+	szind_t i;
 	extent_t *extent;
-	extent_t key;
 
 	/*
 	 * Round size up to nearest multiple of the cacheline size, so that
@@ -89,16 +97,18 @@ base_alloc(tsdn_t *tsdn, size_t size)
 	 */
 	csize = CACHELINE_CEILING(size);
 
-	usize = s2u(csize);
-	extent_init(&key, NULL, NULL, usize, false, false);
+	extent = NULL;
 	malloc_mutex_lock(tsdn, &base_mtx);
-	extent = extent_tree_szad_nsearch(&base_avail_szad, &key);
-	if (extent != NULL) {
-		/* Use existing space. */
-		extent_tree_szad_remove(&base_avail_szad, extent);
-	} else {
+	for (i = size2index(csize); i < NSIZES; i++) {
+		extent = extent_heap_remove_first(&base_avail[i]);
+		if (extent != NULL) {
+			/* Use existing space. */
+			break;
+		}
+	}
+	if (extent == NULL) {
 		/* Try to allocate more space. */
-		extent = base_chunk_alloc(tsdn, csize);
+		extent = base_extent_alloc(tsdn, csize);
 	}
 	if (extent == NULL) {
 		ret = NULL;
@@ -107,9 +117,16 @@ base_alloc(tsdn_t *tsdn, size_t size)
 
 	ret = extent_addr_get(extent);
 	if (extent_size_get(extent) > csize) {
+		szind_t index_floor;
+
 		extent_addr_set(extent, (void *)((uintptr_t)ret + csize));
 		extent_size_set(extent, extent_size_get(extent) - csize);
-		extent_tree_szad_insert(&base_avail_szad, extent);
+		/*
+		 * Compute the index for the largest size class that does not
+		 * exceed extent's size.
+		 */
+		index_floor = size2index(extent_size_get(extent) + 1) - 1;
+		extent_heap_insert(&base_avail[index_floor], extent);
 	} else
 		base_extent_dalloc(tsdn, extent);
 	if (config_stats) {
@@ -143,10 +160,12 @@ base_stats_get(tsdn_t *tsdn, size_t *allocated, size_t *resident,
 bool
 base_boot(void)
 {
+	szind_t i;
 
 	if (malloc_mutex_init(&base_mtx, "base", WITNESS_RANK_BASE))
 		return (true);
-	extent_tree_szad_new(&base_avail_szad);
+	for (i = 0; i < NSIZES; i++)
+		extent_heap_new(&base_avail[i]);
 	base_extents = NULL;
 
 	return (false);

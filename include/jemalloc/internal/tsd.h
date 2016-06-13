@@ -561,19 +561,21 @@ struct tsd_init_head_s {
 #endif
 
 #define	MALLOC_TSD							\
-/*  O(name,			type) */				\
-    O(tcache,			tcache_t *)				\
-    O(thread_allocated,		uint64_t)				\
-    O(thread_deallocated,	uint64_t)				\
-    O(prof_tdata,		prof_tdata_t *)				\
-    O(iarena,			arena_t *)				\
-    O(arena,			arena_t *)				\
-    O(arenas_tdata,		arena_tdata_t *)			\
-    O(narenas_tdata,		unsigned)				\
-    O(arenas_tdata_bypass,	bool)					\
-    O(tcache_enabled,		tcache_enabled_t)			\
-    O(witnesses,		witness_list_t)				\
-    O(witness_fork,		bool)					\
+/*  O(name,			type,			cleanup) */	\
+    O(tcache,			tcache_t *,		yes)		\
+    O(thread_allocated,		uint64_t,		no)		\
+    O(thread_deallocated,	uint64_t,		no)		\
+    O(prof_tdata,		prof_tdata_t *,		yes)		\
+    O(iarena,			arena_t *,		yes)		\
+    O(arena,			arena_t *,		yes)		\
+    O(arenas_tdata,		arena_tdata_t *,	yes)		\
+    O(narenas_tdata,		unsigned,		no)		\
+    O(arenas_tdata_bypass,	bool,			no)		\
+    O(tcache_enabled,		tcache_enabled_t,	no)		\
+    O(rtree_ctx,		rtree_ctx_t,		no)		\
+    O(witnesses,		witness_list_t,		yes)		\
+    O(rtree_elm_witnesses,	rtree_elm_witness_tsd_t,no)		\
+    O(witness_fork,		bool,			no)		\
 
 #define	TSD_INITIALIZER {						\
     tsd_state_uninitialized,						\
@@ -587,13 +589,15 @@ struct tsd_init_head_s {
     0,									\
     false,								\
     tcache_enabled_default,						\
+    RTREE_CTX_INITIALIZER,						\
     ql_head_initializer(witnesses),					\
+    RTREE_ELM_WITNESS_TSD_INITIALIZER,					\
     false								\
 }
 
 struct tsd_s {
 	tsd_state_t	state;
-#define	O(n, t)								\
+#define	O(n, t, c)							\
 	t		n;
 MALLOC_TSD
 #undef O
@@ -640,7 +644,7 @@ malloc_tsd_protos(JEMALLOC_ATTR(unused), , tsd_t)
 tsd_t	*tsd_fetch(void);
 tsdn_t	*tsd_tsdn(tsd_t *tsd);
 bool	tsd_nominal(tsd_t *tsd);
-#define	O(n, t)								\
+#define	O(n, t, c)							\
 t	*tsd_##n##p_get(tsd_t *tsd);					\
 t	tsd_##n##_get(tsd_t *tsd);					\
 void	tsd_##n##_set(tsd_t *tsd, t n);
@@ -649,6 +653,7 @@ MALLOC_TSD
 tsdn_t	*tsdn_fetch(void);
 bool	tsdn_null(const tsdn_t *tsdn);
 tsd_t	*tsdn_tsd(tsdn_t *tsdn);
+rtree_ctx_t	*tsdn_rtree_ctx(tsdn_t *tsdn, rtree_ctx_t *fallback);
 #endif
 
 #if (defined(JEMALLOC_ENABLE_INLINE) || defined(JEMALLOC_TSD_C_))
@@ -689,7 +694,7 @@ tsd_nominal(tsd_t *tsd)
 	return (tsd->state == tsd_state_nominal);
 }
 
-#define	O(n, t)								\
+#define	O(n, t, c)							\
 JEMALLOC_ALWAYS_INLINE t *						\
 tsd_##n##p_get(tsd_t *tsd)						\
 {									\
@@ -738,6 +743,22 @@ tsdn_tsd(tsdn_t *tsdn)
 	assert(!tsdn_null(tsdn));
 
 	return (&tsdn->tsd);
+}
+
+JEMALLOC_ALWAYS_INLINE rtree_ctx_t *
+tsdn_rtree_ctx(tsdn_t *tsdn, rtree_ctx_t *fallback)
+{
+
+	/*
+	 * If tsd cannot be accessed, initialize the fallback rtree_ctx and
+	 * return a pointer to it.
+	 */
+	if (unlikely(tsdn_null(tsdn))) {
+		static const rtree_ctx_t rtree_ctx = RTREE_CTX_INITIALIZER;
+		memcpy(fallback, &rtree_ctx, sizeof(rtree_ctx_t));
+		return (fallback);
+	}
+	return (tsd_rtree_ctxp_get(tsdn_tsd(tsdn)));
 }
 #endif
 

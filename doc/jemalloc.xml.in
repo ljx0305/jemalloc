@@ -417,22 +417,21 @@ for (i = 0; i < nbins; i++) {
       <parameter>write_cb</parameter>, or
       <function>malloc_message<parameter/></function> if
       <parameter>write_cb</parameter> is <constant>NULL</constant>.  This
-      function can be called repeatedly.  General information that never
-      changes during execution can be omitted by specifying "g" as a character
-      within the <parameter>opts</parameter> string.  Note that
+      function can be called repeatedly.  General information that never changes
+      during execution can be omitted by specifying "g" as a character within
+      the <parameter>opts</parameter> string.  Note that
       <function>malloc_message<parameter/></function> uses the
       <function>mallctl*<parameter/></function> functions internally, so
       inconsistent statistics can be reported if multiple threads use these
-      functions simultaneously.  If <option>--enable-stats</option> is
-      specified during configuration, &ldquo;m&rdquo; and &ldquo;a&rdquo; can
-      be specified to omit merged arena and per arena statistics, respectively;
-      &ldquo;b&rdquo;, &ldquo;l&rdquo;, and &ldquo;h&rdquo; can be specified to
-      omit per size class statistics for bins, large objects, and huge objects,
-      respectively.  Unrecognized characters are silently ignored.  Note that
-      thread caching may prevent some statistics from being completely up to
-      date, since extra locking would be required to merge counters that track
-      thread cache operations.
-      </para>
+      functions simultaneously.  If <option>--enable-stats</option> is specified
+      during configuration, &ldquo;m&rdquo; and &ldquo;a&rdquo; can be specified
+      to omit merged arena and per arena statistics, respectively;
+      &ldquo;b&rdquo; and &ldquo;l&rdquo; can be specified to omit per size
+      class statistics for bins and large objects, respectively.  Unrecognized
+      characters are silently ignored.  Note that thread caching may prevent
+      some statistics from being completely up to date, since extra locking
+      would be required to merge counters that track thread cache
+      operations.</para>
 
       <para>The <function>malloc_usable_size<parameter/></function> function
       returns the usable size of the allocation pointed to by
@@ -510,26 +509,20 @@ for (i = 0; i < nbins; i++) {
 
     <para>In addition to multiple arenas, unless
     <option>--disable-tcache</option> is specified during configuration, this
-    allocator supports thread-specific caching for small and large objects, in
-    order to make it possible to completely avoid synchronization for most
-    allocation requests.  Such caching allows very fast allocation in the
-    common case, but it increases memory usage and fragmentation, since a
-    bounded number of objects can remain allocated in each thread cache.</para>
+    allocator supports thread-specific caching, in order to make it possible to
+    completely avoid synchronization for most allocation requests.  Such caching
+    allows very fast allocation in the common case, but it increases memory
+    usage and fragmentation, since a bounded number of objects can remain
+    allocated in each thread cache.</para>
 
-    <para>Memory is conceptually broken into equal-sized chunks, where the chunk
-    size is a power of two that is greater than the page size.  Chunks are
-    always aligned to multiples of the chunk size.  This alignment makes it
-    possible to find metadata for user objects very quickly.  User objects are
-    broken into three categories according to size: small, large, and huge.
-    Multiple small and large objects can reside within a single chunk, whereas
-    huge objects each have one or more chunks backing them.  Each chunk that
-    contains small and/or large objects tracks its contents as runs of
-    contiguous pages (unused, backing a set of small objects, or backing one
-    large object).  The combination of chunk alignment and chunk page maps makes
-    it possible to determine all metadata regarding small and large allocations
-    in constant time.</para>
+    <para>Memory is conceptually broken into extents.  Extents are always
+    aligned to multiples of the page size.  This alignment makes it possible to
+    find metadata for user objects quickly.  User objects are broken into two
+    categories according to size: small and large.  Contiguous small objects
+    comprise a slab, which resides within a single extent, whereas large objects
+    each have their own extents backing them.</para>
 
-    <para>Small objects are managed in groups by page runs.  Each run maintains
+    <para>Small objects are managed in groups by slabs.  Each slab maintains
     a bitmap to track which regions are in use.  Allocation requests that are no
     more than half the quantum (8 or 16, depending on architecture) are rounded
     up to the nearest power of two that is at least <code
@@ -537,11 +530,9 @@ for (i = 0; i < nbins; i++) {
     classes are multiples of the quantum, spaced such that there are four size
     classes for each doubling in size, which limits internal fragmentation to
     approximately 20% for all but the smallest size classes.  Small size classes
-    are smaller than four times the page size, large size classes are smaller
-    than the chunk size (see the <link
-    linkend="opt.lg_chunk"><mallctl>opt.lg_chunk</mallctl></link> option), and
-    huge size classes extend from the chunk size up to the largest size class
-    that does not exceed <constant>PTRDIFF_MAX</constant>.</para>
+    are smaller than four times the page size, and large size classes extend
+    from four times the page size up to the largest size class that does not
+    exceed <constant>PTRDIFF_MAX</constant>.</para>
 
     <para>Allocations are packed tightly together, which can be an issue for
     multi-threaded applications.  If you need to assure that allocations do not
@@ -561,18 +552,16 @@ for (i = 0; i < nbins; i++) {
     trivially succeeds in place as long as the pre-size and post-size both round
     up to the same size class.  No other API guarantees are made regarding
     in-place resizing, but the current implementation also tries to resize large
-    and huge allocations in place, as long as the pre-size and post-size are
-    both large or both huge.  In such cases shrinkage always succeeds for large
-    size classes, but for huge size classes the chunk allocator must support
-    splitting (see <link
-    linkend="arena.i.chunk_hooks"><mallctl>arena.&lt;i&gt;.chunk_hooks</mallctl></link>).
-    Growth only succeeds if the trailing memory is currently available, and
-    additionally for huge size classes the chunk allocator must support
-    merging.</para>
+    allocations in place, as long as the pre-size and post-size are both large.
+    For shrinkage to succeed, the extent allocator must support splitting (see
+    <link
+    linkend="arena.i.extent_hooks"><mallctl>arena.&lt;i&gt;.extent_hooks</mallctl></link>).
+    Growth only succeeds if the trailing memory is currently available, and the
+    extent allocator supports merging.</para>
 
-    <para>Assuming 2 MiB chunks, 4 KiB pages, and a 16-byte quantum on a
-    64-bit system, the size classes in each category are as shown in <xref
-    linkend="size_classes" xrefstyle="template:Table %n"/>.</para>
+    <para>Assuming 4 KiB pages and a 16-byte quantum on a 64-bit system, the
+    size classes in each category are as shown in <xref linkend="size_classes"
+    xrefstyle="template:Table %n"/>.</para>
 
     <table xml:id="size_classes" frame="all">
       <title>Size classes</title>
@@ -626,7 +615,7 @@ for (i = 0; i < nbins; i++) {
           <entry>[10 KiB, 12 KiB, 14 KiB]</entry>
         </row>
         <row>
-          <entry morerows="7">Large</entry>
+          <entry morerows="15">Large</entry>
           <entry>2 KiB</entry>
           <entry>[16 KiB]</entry>
         </row>
@@ -656,12 +645,7 @@ for (i = 0; i < nbins; i++) {
         </row>
         <row>
           <entry>256 KiB</entry>
-          <entry>[1280 KiB, 1536 KiB, 1792 KiB]</entry>
-        </row>
-        <row>
-          <entry morerows="8">Huge</entry>
-          <entry>256 KiB</entry>
-          <entry>[2 MiB]</entry>
+          <entry>[1280 KiB, 1536 KiB, 1792 KiB, 2 MiB]</entry>
         </row>
         <row>
           <entry>512 KiB</entry>
@@ -1517,9 +1501,7 @@ malloc_conf = "xmalloc:true";]]></programlisting>
         of the arena's discarded/cached allocations may accessed afterward.  As
         part of this requirement, all thread caches which were used to
         allocate/deallocate in conjunction with the arena must be flushed
-        beforehand.  This interface cannot be used if running inside Valgrind,
-        nor if the <link linkend="opt.quarantine">quarantine</link> size is
-        non-zero.</para></listitem>
+        beforehand.</para></listitem>
       </varlistentry>
 
       <varlistentry id="arena.i.dss">
@@ -1566,51 +1548,53 @@ malloc_conf = "xmalloc:true";]]></programlisting>
         additional information.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="arena.i.chunk_hooks">
+      <varlistentry id="arena.i.extent_hooks">
         <term>
-          <mallctl>arena.&lt;i&gt;.chunk_hooks</mallctl>
-          (<type>chunk_hooks_t</type>)
+          <mallctl>arena.&lt;i&gt;.extent_hooks</mallctl>
+          (<type>extent_hooks_t *</type>)
           <literal>rw</literal>
         </term>
-        <listitem><para>Get or set the chunk management hook functions for arena
-        &lt;i&gt;.  The functions must be capable of operating on all extant
-        chunks associated with arena &lt;i&gt;, usually by passing unknown
-        chunks to the replaced functions.  In practice, it is feasible to
-        control allocation for arenas created via <link
+        <listitem><para>Get or set the extent management hook functions for
+        arena &lt;i&gt;.  The functions must be capable of operating on all
+        extant extents associated with arena &lt;i&gt;, usually by passing
+        unknown extents to the replaced functions.  In practice, it is feasible
+        to control allocation for arenas created via <link
         linkend="arenas.extend"><mallctl>arenas.extend</mallctl></link> such
-        that all chunks originate from an application-supplied chunk allocator
-        (by setting custom chunk hook functions just after arena creation), but
-        the automatically created arenas may have already created chunks prior
-        to the application having an opportunity to take over chunk
+        that all extents originate from an application-supplied extent allocator
+        (by setting custom extent hook functions just after arena creation), but
+        the automatically created arenas may have already created extents prior
+        to the application having an opportunity to take over extent
         allocation.</para>
 
         <programlisting language="C"><![CDATA[
-typedef struct {
-	chunk_alloc_t		*alloc;
-	chunk_dalloc_t		*dalloc;
-	chunk_commit_t		*commit;
-	chunk_decommit_t	*decommit;
-	chunk_purge_t		*purge;
-	chunk_split_t		*split;
-	chunk_merge_t		*merge;
-} chunk_hooks_t;]]></programlisting>
-        <para>The <type>chunk_hooks_t</type> structure comprises function
+typedef extent_hooks_s extent_hooks_t;
+struct extent_hooks_s {
+	extent_alloc_t		*alloc;
+	extent_dalloc_t		*dalloc;
+	extent_commit_t		*commit;
+	extent_decommit_t	*decommit;
+	extent_purge_t		*purge;
+	extent_split_t		*split;
+	extent_merge_t		*merge;
+};]]></programlisting>
+        <para>The <type>extent_hooks_t</type> structure comprises function
         pointers which are described individually below.  jemalloc uses these
-        functions to manage chunk lifetime, which starts off with allocation of
+        functions to manage extent lifetime, which starts off with allocation of
         mapped committed memory, in the simplest case followed by deallocation.
-        However, there are performance and platform reasons to retain chunks for
-        later reuse.  Cleanup attempts cascade from deallocation to decommit to
-        purging, which gives the chunk management functions opportunities to
+        However, there are performance and platform reasons to retain extents
+        for later reuse.  Cleanup attempts cascade from deallocation to decommit
+        to purging, which gives the extent management functions opportunities to
         reject the most permanent cleanup operations in favor of less permanent
-        (and often less costly) operations.  The chunk splitting and merging
+        (and often less costly) operations.  The extent splitting and merging
         operations can also be opted out of, but this is mainly intended to
         support platforms on which virtual memory mappings provided by the
         operating system kernel do not automatically coalesce and split, e.g.
         Windows.</para>
 
         <funcsynopsis><funcprototype>
-          <funcdef>typedef void *<function>(chunk_alloc_t)</function></funcdef>
-          <paramdef>void *<parameter>chunk</parameter></paramdef>
+          <funcdef>typedef void *<function>(extent_alloc_t)</function></funcdef>
+          <paramdef>extent_hooks_t *<parameter>extent_hooks</parameter></paramdef>
+          <paramdef>void *<parameter>new_addr</parameter></paramdef>
           <paramdef>size_t <parameter>size</parameter></paramdef>
           <paramdef>size_t <parameter>alignment</parameter></paramdef>
           <paramdef>bool *<parameter>zero</parameter></paramdef>
@@ -1618,62 +1602,64 @@ typedef struct {
           <paramdef>unsigned <parameter>arena_ind</parameter></paramdef>
         </funcprototype></funcsynopsis>
         <literallayout></literallayout>
-        <para>A chunk allocation function conforms to the
-        <type>chunk_alloc_t</type> type and upon success returns a pointer to
+        <para>An extent allocation function conforms to the
+        <type>extent_alloc_t</type> type and upon success returns a pointer to
         <parameter>size</parameter> bytes of mapped memory on behalf of arena
-        <parameter>arena_ind</parameter> such that the chunk's base address is a
-        multiple of <parameter>alignment</parameter>, as well as setting
-        <parameter>*zero</parameter> to indicate whether the chunk is zeroed and
-        <parameter>*commit</parameter> to indicate whether the chunk is
+        <parameter>arena_ind</parameter> such that the extent's base address is
+        a multiple of <parameter>alignment</parameter>, as well as setting
+        <parameter>*zero</parameter> to indicate whether the extent is zeroed
+        and <parameter>*commit</parameter> to indicate whether the extent is
         committed.  Upon error the function returns <constant>NULL</constant>
         and leaves <parameter>*zero</parameter> and
         <parameter>*commit</parameter> unmodified.  The
-        <parameter>size</parameter> parameter is always a multiple of the chunk
+        <parameter>size</parameter> parameter is always a multiple of the page
         size.  The <parameter>alignment</parameter> parameter is always a power
-        of two at least as large as the chunk size.  Zeroing is mandatory if
+        of two at least as large as the page size.  Zeroing is mandatory if
         <parameter>*zero</parameter> is true upon function entry.  Committing is
         mandatory if <parameter>*commit</parameter> is true upon function entry.
-        If <parameter>chunk</parameter> is not <constant>NULL</constant>, the
-        returned pointer must be <parameter>chunk</parameter> on success or
+        If <parameter>new_addr</parameter> is not <constant>NULL</constant>, the
+        returned pointer must be <parameter>new_addr</parameter> on success or
         <constant>NULL</constant> on error.  Committed memory may be committed
         in absolute terms as on a system that does not overcommit, or in
         implicit terms as on a system that overcommits and satisfies physical
         memory needs on demand via soft page faults.  Note that replacing the
-        default chunk allocation function makes the arena's <link
+        default extent allocation function makes the arena's <link
         linkend="arena.i.dss"><mallctl>arena.&lt;i&gt;.dss</mallctl></link>
         setting irrelevant.</para>
 
         <funcsynopsis><funcprototype>
-          <funcdef>typedef bool <function>(chunk_dalloc_t)</function></funcdef>
-          <paramdef>void *<parameter>chunk</parameter></paramdef>
+          <funcdef>typedef bool <function>(extent_dalloc_t)</function></funcdef>
+          <paramdef>extent_hooks_t *<parameter>extent_hooks</parameter></paramdef>
+          <paramdef>void *<parameter>addr</parameter></paramdef>
           <paramdef>size_t <parameter>size</parameter></paramdef>
           <paramdef>bool <parameter>committed</parameter></paramdef>
           <paramdef>unsigned <parameter>arena_ind</parameter></paramdef>
         </funcprototype></funcsynopsis>
         <literallayout></literallayout>
         <para>
-        A chunk deallocation function conforms to the
-        <type>chunk_dalloc_t</type> type and deallocates a
-        <parameter>chunk</parameter> of given <parameter>size</parameter> with
+        An extent deallocation function conforms to the
+        <type>extent_dalloc_t</type> type and deallocates an extent at given
+        <parameter>addr</parameter> and <parameter>size</parameter> with
         <parameter>committed</parameter>/decommited memory as indicated, on
         behalf of arena <parameter>arena_ind</parameter>, returning false upon
         success.  If the function returns true, this indicates opt-out from
-        deallocation; the virtual memory mapping associated with the chunk
+        deallocation; the virtual memory mapping associated with the extent
         remains mapped, in the same commit state, and available for future use,
         in which case it will be automatically retained for later reuse.</para>
 
         <funcsynopsis><funcprototype>
-          <funcdef>typedef bool <function>(chunk_commit_t)</function></funcdef>
-          <paramdef>void *<parameter>chunk</parameter></paramdef>
+          <funcdef>typedef bool <function>(extent_commit_t)</function></funcdef>
+          <paramdef>extent_hooks_t *<parameter>extent_hooks</parameter></paramdef>
+          <paramdef>void *<parameter>addr</parameter></paramdef>
           <paramdef>size_t <parameter>size</parameter></paramdef>
           <paramdef>size_t <parameter>offset</parameter></paramdef>
           <paramdef>size_t <parameter>length</parameter></paramdef>
           <paramdef>unsigned <parameter>arena_ind</parameter></paramdef>
         </funcprototype></funcsynopsis>
         <literallayout></literallayout>
-        <para>A chunk commit function conforms to the
-        <type>chunk_commit_t</type> type and commits zeroed physical memory to
-        back pages within a <parameter>chunk</parameter> of given
+        <para>An extent commit function conforms to the
+        <type>extent_commit_t</type> type and commits zeroed physical memory to
+        back pages within an extent at given <parameter>addr</parameter> and
         <parameter>size</parameter> at <parameter>offset</parameter> bytes,
         extending for <parameter>length</parameter> on behalf of arena
         <parameter>arena_ind</parameter>, returning false upon success.
@@ -1684,46 +1670,51 @@ typedef struct {
         physical memory to satisfy the request.</para>
 
         <funcsynopsis><funcprototype>
-          <funcdef>typedef bool <function>(chunk_decommit_t)</function></funcdef>
-          <paramdef>void *<parameter>chunk</parameter></paramdef>
+          <funcdef>typedef bool <function>(extent_decommit_t)</function></funcdef>
+          <paramdef>extent_hooks_t *<parameter>extent_hooks</parameter></paramdef>
+          <paramdef>void *<parameter>addr</parameter></paramdef>
           <paramdef>size_t <parameter>size</parameter></paramdef>
           <paramdef>size_t <parameter>offset</parameter></paramdef>
           <paramdef>size_t <parameter>length</parameter></paramdef>
           <paramdef>unsigned <parameter>arena_ind</parameter></paramdef>
         </funcprototype></funcsynopsis>
         <literallayout></literallayout>
-        <para>A chunk decommit function conforms to the
-        <type>chunk_decommit_t</type> type and decommits any physical memory
-        that is backing pages within a <parameter>chunk</parameter> of given
-        <parameter>size</parameter> at <parameter>offset</parameter> bytes,
-        extending for <parameter>length</parameter> on behalf of arena
+        <para>An extent decommit function conforms to the
+        <type>extent_decommit_t</type> type and decommits any physical memory
+        that is backing pages within an extent at given
+        <parameter>addr</parameter> and <parameter>size</parameter> at
+        <parameter>offset</parameter> bytes, extending for
+        <parameter>length</parameter> on behalf of arena
         <parameter>arena_ind</parameter>, returning false upon success, in which
-        case the pages will be committed via the chunk commit function before
+        case the pages will be committed via the extent commit function before
         being reused.  If the function returns true, this indicates opt-out from
         decommit; the memory remains committed and available for future use, in
         which case it will be automatically retained for later reuse.</para>
 
         <funcsynopsis><funcprototype>
-          <funcdef>typedef bool <function>(chunk_purge_t)</function></funcdef>
-          <paramdef>void *<parameter>chunk</parameter></paramdef>
+          <funcdef>typedef bool <function>(extent_purge_t)</function></funcdef>
+          <paramdef>extent_hooks_t *<parameter>extent_hooks</parameter></paramdef>
+          <paramdef>void *<parameter>addr</parameter></paramdef>
           <paramdef>size_t<parameter>size</parameter></paramdef>
           <paramdef>size_t <parameter>offset</parameter></paramdef>
           <paramdef>size_t <parameter>length</parameter></paramdef>
           <paramdef>unsigned <parameter>arena_ind</parameter></paramdef>
         </funcprototype></funcsynopsis>
         <literallayout></literallayout>
-        <para>A chunk purge function conforms to the <type>chunk_purge_t</type>
-        type and optionally discards physical pages within the virtual memory
-        mapping associated with <parameter>chunk</parameter> of given
-        <parameter>size</parameter> at <parameter>offset</parameter> bytes,
-        extending for <parameter>length</parameter> on behalf of arena
+        <para>An extent purge function conforms to the
+        <type>extent_purge_t</type> type and optionally discards physical pages
+        within the virtual memory mapping associated with an extent at given
+        <parameter>addr</parameter> and <parameter>size</parameter> at
+        <parameter>offset</parameter> bytes, extending for
+        <parameter>length</parameter> on behalf of arena
         <parameter>arena_ind</parameter>, returning false if pages within the
         purged virtual memory range will be zero-filled the next time they are
         accessed.</para>
 
         <funcsynopsis><funcprototype>
-          <funcdef>typedef bool <function>(chunk_split_t)</function></funcdef>
-          <paramdef>void *<parameter>chunk</parameter></paramdef>
+          <funcdef>typedef bool <function>(extent_split_t)</function></funcdef>
+          <paramdef>extent_hooks_t *<parameter>extent_hooks</parameter></paramdef>
+          <paramdef>void *<parameter>addr</parameter></paramdef>
           <paramdef>size_t <parameter>size</parameter></paramdef>
           <paramdef>size_t <parameter>size_a</parameter></paramdef>
           <paramdef>size_t <parameter>size_b</parameter></paramdef>
@@ -1731,35 +1722,36 @@ typedef struct {
           <paramdef>unsigned <parameter>arena_ind</parameter></paramdef>
         </funcprototype></funcsynopsis>
         <literallayout></literallayout>
-        <para>A chunk split function conforms to the <type>chunk_split_t</type>
-        type and optionally splits <parameter>chunk</parameter> of given
-        <parameter>size</parameter> into two adjacent chunks, the first of
-        <parameter>size_a</parameter> bytes, and the second of
-        <parameter>size_b</parameter> bytes, operating on
+        <para>An extent split function conforms to the
+        <type>extent_split_t</type> type and optionally splits an extent at
+        given <parameter>addr</parameter> and <parameter>size</parameter> into
+        two adjacent extents, the first of <parameter>size_a</parameter> bytes,
+        and the second of <parameter>size_b</parameter> bytes, operating on
         <parameter>committed</parameter>/decommitted memory as indicated, on
         behalf of arena <parameter>arena_ind</parameter>, returning false upon
-        success.  If the function returns true, this indicates that the chunk
+        success.  If the function returns true, this indicates that the extent
         remains unsplit and therefore should continue to be operated on as a
         whole.</para>
 
         <funcsynopsis><funcprototype>
-          <funcdef>typedef bool <function>(chunk_merge_t)</function></funcdef>
-          <paramdef>void *<parameter>chunk_a</parameter></paramdef>
+          <funcdef>typedef bool <function>(extent_merge_t)</function></funcdef>
+          <paramdef>extent_hooks_t *<parameter>extent_hooks</parameter></paramdef>
+          <paramdef>void *<parameter>addr_a</parameter></paramdef>
           <paramdef>size_t <parameter>size_a</parameter></paramdef>
-          <paramdef>void *<parameter>chunk_b</parameter></paramdef>
+          <paramdef>void *<parameter>addr_b</parameter></paramdef>
           <paramdef>size_t <parameter>size_b</parameter></paramdef>
           <paramdef>bool <parameter>committed</parameter></paramdef>
           <paramdef>unsigned <parameter>arena_ind</parameter></paramdef>
         </funcprototype></funcsynopsis>
         <literallayout></literallayout>
-        <para>A chunk merge function conforms to the <type>chunk_merge_t</type>
-        type and optionally merges adjacent chunks,
-        <parameter>chunk_a</parameter> of given <parameter>size_a</parameter>
-        and <parameter>chunk_b</parameter> of given
-        <parameter>size_b</parameter> into one contiguous chunk, operating on
+        <para>An extent merge function conforms to the
+        <type>extent_merge_t</type> type and optionally merges adjacent extents,
+        at given <parameter>addr_a</parameter> and <parameter>size_a</parameter>
+        with given <parameter>addr_b</parameter> and
+        <parameter>size_b</parameter> into one contiguous extent, operating on
         <parameter>committed</parameter>/decommitted memory as indicated, on
         behalf of arena <parameter>arena_ind</parameter>, returning false upon
-        success.  If the function returns true, this indicates that the chunks
+        success.  If the function returns true, this indicates that the extents
         remain distinct mappings and therefore should continue to be operated on
         independently.</para>
         </listitem>
@@ -1878,53 +1870,34 @@ typedef struct {
           (<type>uint32_t</type>)
           <literal>r-</literal>
         </term>
-        <listitem><para>Number of regions per page run.</para></listitem>
+        <listitem><para>Number of regions per slab.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="arenas.bin.i.run_size">
+      <varlistentry id="arenas.bin.i.slab_size">
         <term>
-          <mallctl>arenas.bin.&lt;i&gt;.run_size</mallctl>
+          <mallctl>arenas.bin.&lt;i&gt;.slab_size</mallctl>
           (<type>size_t</type>)
           <literal>r-</literal>
         </term>
-        <listitem><para>Number of bytes per page run.</para></listitem>
+        <listitem><para>Number of bytes per slab.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="arenas.nlruns">
+      <varlistentry id="arenas.nlextents">
         <term>
-          <mallctl>arenas.nlruns</mallctl>
+          <mallctl>arenas.nlextents</mallctl>
           (<type>unsigned</type>)
           <literal>r-</literal>
         </term>
         <listitem><para>Total number of large size classes.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="arenas.lrun.i.size">
+      <varlistentry id="arenas.lextent.i.size">
         <term>
-          <mallctl>arenas.lrun.&lt;i&gt;.size</mallctl>
+          <mallctl>arenas.lextent.&lt;i&gt;.size</mallctl>
           (<type>size_t</type>)
           <literal>r-</literal>
         </term>
         <listitem><para>Maximum size supported by this large size
-        class.</para></listitem>
-      </varlistentry>
-
-      <varlistentry id="arenas.nhchunks">
-        <term>
-          <mallctl>arenas.nhchunks</mallctl>
-          (<type>unsigned</type>)
-          <literal>r-</literal>
-        </term>
-        <listitem><para>Total number of huge size classes.</para></listitem>
-      </varlistentry>
-
-      <varlistentry id="arenas.hchunk.i.size">
-        <term>
-          <mallctl>arenas.hchunk.&lt;i&gt;.size</mallctl>
-          (<type>size_t</type>)
-          <literal>r-</literal>
-        </term>
-        <listitem><para>Maximum size supported by this huge size
         class.</para></listitem>
       </varlistentry>
 
@@ -2094,10 +2067,8 @@ typedef struct {
         </term>
         <listitem><para>Total number of bytes dedicated to metadata, which
         comprise base allocations used for bootstrap-sensitive internal
-        allocator data structures, arena chunk headers (see <link
-        linkend="stats.arenas.i.metadata.mapped"><mallctl>stats.arenas.&lt;i&gt;.metadata.mapped</mallctl></link>),
-        and internal allocations (see <link
-        linkend="stats.arenas.i.metadata.allocated"><mallctl>stats.arenas.&lt;i&gt;.metadata.allocated</mallctl></link>).</para></listitem>
+        allocator data structures and internal allocations (see <link
+        linkend="stats.arenas.i.metadata"><mallctl>stats.arenas.&lt;i&gt;.metadata</mallctl></link>).</para></listitem>
       </varlistentry>
 
       <varlistentry id="stats.resident">
@@ -2124,12 +2095,12 @@ typedef struct {
           <literal>r-</literal>
           [<option>--enable-stats</option>]
         </term>
-        <listitem><para>Total number of bytes in active chunks mapped by the
-        allocator.  This is a multiple of the chunk size, and is larger than
-        <link linkend="stats.active"><mallctl>stats.active</mallctl></link>.
-        This does not include inactive chunks, even those that contain unused
-        dirty pages, which means that there is no strict ordering between this
-        and <link
+        <listitem><para>Total number of bytes in active extents mapped by the
+        allocator.  This is larger than <link
+        linkend="stats.active"><mallctl>stats.active</mallctl></link>.  This
+        does not include inactive extents, even those that contain unused dirty
+        pages, which means that there is no strict ordering between this and
+        <link
         linkend="stats.resident"><mallctl>stats.resident</mallctl></link>.</para></listitem>
       </varlistentry>
 
@@ -2146,8 +2117,8 @@ typedef struct {
         <manvolnum>2</manvolnum></citerefentry>.  Retained virtual memory is
         typically untouched, decommitted, or purged, so it has no strongly
         associated physical memory (see <link
-        linkend="arena.i.chunk_hooks">chunk hooks</link> for details).  Retained
-        memory is excluded from mapped memory statistics, e.g. <link
+        linkend="arena.i.extent_hooks">extent hooks</link> for details).
+        Retained memory is excluded from mapped memory statistics, e.g. <link
         linkend="stats.mapped"><mallctl>stats.mapped</mallctl></link>.
         </para></listitem>
       </varlistentry>
@@ -2207,7 +2178,7 @@ typedef struct {
           (<type>size_t</type>)
           <literal>r-</literal>
         </term>
-        <listitem><para>Number of pages in active runs.</para></listitem>
+        <listitem><para>Number of pages in active extents.</para></listitem>
       </varlistentry>
 
       <varlistentry id="stats.arenas.i.pdirty">
@@ -2216,8 +2187,9 @@ typedef struct {
           (<type>size_t</type>)
           <literal>r-</literal>
         </term>
-        <listitem><para>Number of pages within unused runs that are potentially
-        dirty, and for which <function>madvise<parameter>...</parameter>
+        <listitem><para>Number of pages within unused extents that are
+        potentially dirty, and for which
+        <function>madvise<parameter>...</parameter>
         <parameter><constant>MADV_DONTNEED</constant></parameter></function> or
         similar has not been called.</para></listitem>
       </varlistentry>
@@ -2244,20 +2216,9 @@ typedef struct {
         details.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.metadata.mapped">
+      <varlistentry id="stats.arenas.i.metadata">
         <term>
-          <mallctl>stats.arenas.&lt;i&gt;.metadata.mapped</mallctl>
-          (<type>size_t</type>)
-          <literal>r-</literal>
-          [<option>--enable-stats</option>]
-        </term>
-        <listitem><para>Number of mapped bytes in arena chunk headers, which
-        track the states of the non-metadata pages.</para></listitem>
-      </varlistentry>
-
-      <varlistentry id="stats.arenas.i.metadata.allocated">
-        <term>
-          <mallctl>stats.arenas.&lt;i&gt;.metadata.allocated</mallctl>
+          <mallctl>stats.arenas.&lt;i&gt;.metadata</mallctl>
           (<type>size_t</type>)
           <literal>r-</literal>
           [<option>--enable-stats</option>]
@@ -2266,9 +2227,7 @@ typedef struct {
         Internal allocations differ from application-originated allocations in
         that they are for internal use, and that they are omitted from heap
         profiles.  This statistic is reported separately from <link
-        linkend="stats.metadata"><mallctl>stats.metadata</mallctl></link> and
-        <link
-        linkend="stats.arenas.i.metadata.mapped"><mallctl>stats.arenas.&lt;i&gt;.metadata.mapped</mallctl></link>
+        linkend="stats.metadata"><mallctl>stats.metadata</mallctl></link>
         because it overlaps with e.g. the <link
         linkend="stats.allocated"><mallctl>stats.allocated</mallctl></link> and
         <link linkend="stats.active"><mallctl>stats.active</mallctl></link>
@@ -2397,50 +2356,6 @@ typedef struct {
         </para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.huge.allocated">
-        <term>
-          <mallctl>stats.arenas.&lt;i&gt;.huge.allocated</mallctl>
-          (<type>size_t</type>)
-          <literal>r-</literal>
-          [<option>--enable-stats</option>]
-        </term>
-        <listitem><para>Number of bytes currently allocated by huge objects.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry id="stats.arenas.i.huge.nmalloc">
-        <term>
-          <mallctl>stats.arenas.&lt;i&gt;.huge.nmalloc</mallctl>
-          (<type>uint64_t</type>)
-          <literal>r-</literal>
-          [<option>--enable-stats</option>]
-        </term>
-        <listitem><para>Cumulative number of huge allocation requests served
-        directly by the arena.</para></listitem>
-      </varlistentry>
-
-      <varlistentry id="stats.arenas.i.huge.ndalloc">
-        <term>
-          <mallctl>stats.arenas.&lt;i&gt;.huge.ndalloc</mallctl>
-          (<type>uint64_t</type>)
-          <literal>r-</literal>
-          [<option>--enable-stats</option>]
-        </term>
-        <listitem><para>Cumulative number of huge deallocation requests served
-        directly by the arena.</para></listitem>
-      </varlistentry>
-
-      <varlistentry id="stats.arenas.i.huge.nrequests">
-        <term>
-          <mallctl>stats.arenas.&lt;i&gt;.huge.nrequests</mallctl>
-          (<type>uint64_t</type>)
-          <literal>r-</literal>
-          [<option>--enable-stats</option>]
-        </term>
-        <listitem><para>Cumulative number of huge allocation requests.
-        </para></listitem>
-      </varlistentry>
-
       <varlistentry id="stats.arenas.i.bins.j.nmalloc">
         <term>
           <mallctl>stats.arenas.&lt;i&gt;.bins.&lt;j&gt;.nmalloc</mallctl>
@@ -2505,40 +2420,40 @@ typedef struct {
         <listitem><para>Cumulative number of tcache flushes.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.bins.j.nruns">
+      <varlistentry id="stats.arenas.i.bins.j.nslabs">
         <term>
-          <mallctl>stats.arenas.&lt;i&gt;.bins.&lt;j&gt;.nruns</mallctl>
+          <mallctl>stats.arenas.&lt;i&gt;.bins.&lt;j&gt;.nslabs</mallctl>
           (<type>uint64_t</type>)
           <literal>r-</literal>
           [<option>--enable-stats</option>]
         </term>
-        <listitem><para>Cumulative number of runs created.</para></listitem>
+        <listitem><para>Cumulative number of slabs created.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.bins.j.nreruns">
+      <varlistentry id="stats.arenas.i.bins.j.nreslabs">
         <term>
-          <mallctl>stats.arenas.&lt;i&gt;.bins.&lt;j&gt;.nreruns</mallctl>
+          <mallctl>stats.arenas.&lt;i&gt;.bins.&lt;j&gt;.nreslabs</mallctl>
           (<type>uint64_t</type>)
           <literal>r-</literal>
           [<option>--enable-stats</option>]
         </term>
-        <listitem><para>Cumulative number of times the current run from which
+        <listitem><para>Cumulative number of times the current slab from which
         to allocate changed.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.bins.j.curruns">
+      <varlistentry id="stats.arenas.i.bins.j.curslabs">
         <term>
-          <mallctl>stats.arenas.&lt;i&gt;.bins.&lt;j&gt;.curruns</mallctl>
+          <mallctl>stats.arenas.&lt;i&gt;.bins.&lt;j&gt;.curslabs</mallctl>
           (<type>size_t</type>)
           <literal>r-</literal>
           [<option>--enable-stats</option>]
         </term>
-        <listitem><para>Current number of runs.</para></listitem>
+        <listitem><para>Current number of slabs.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.lruns.j.nmalloc">
+      <varlistentry id="stats.arenas.i.lextents.j.nmalloc">
         <term>
-          <mallctl>stats.arenas.&lt;i&gt;.lruns.&lt;j&gt;.nmalloc</mallctl>
+          <mallctl>stats.arenas.&lt;i&gt;.lextents.&lt;j&gt;.nmalloc</mallctl>
           (<type>uint64_t</type>)
           <literal>r-</literal>
           [<option>--enable-stats</option>]
@@ -2547,9 +2462,9 @@ typedef struct {
         class served directly by the arena.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.lruns.j.ndalloc">
+      <varlistentry id="stats.arenas.i.lextents.j.ndalloc">
         <term>
-          <mallctl>stats.arenas.&lt;i&gt;.lruns.&lt;j&gt;.ndalloc</mallctl>
+          <mallctl>stats.arenas.&lt;i&gt;.lextents.&lt;j&gt;.ndalloc</mallctl>
           (<type>uint64_t</type>)
           <literal>r-</literal>
           [<option>--enable-stats</option>]
@@ -2558,9 +2473,9 @@ typedef struct {
         size class served directly by the arena.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.lruns.j.nrequests">
+      <varlistentry id="stats.arenas.i.lextents.j.nrequests">
         <term>
-          <mallctl>stats.arenas.&lt;i&gt;.lruns.&lt;j&gt;.nrequests</mallctl>
+          <mallctl>stats.arenas.&lt;i&gt;.lextents.&lt;j&gt;.nrequests</mallctl>
           (<type>uint64_t</type>)
           <literal>r-</literal>
           [<option>--enable-stats</option>]
@@ -2569,58 +2484,14 @@ typedef struct {
         class.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.lruns.j.curruns">
+      <varlistentry id="stats.arenas.i.lextents.j.curlextents">
         <term>
-          <mallctl>stats.arenas.&lt;i&gt;.lruns.&lt;j&gt;.curruns</mallctl>
+          <mallctl>stats.arenas.&lt;i&gt;.lextents.&lt;j&gt;.curlextents</mallctl>
           (<type>size_t</type>)
           <literal>r-</literal>
           [<option>--enable-stats</option>]
         </term>
-        <listitem><para>Current number of runs for this size class.
-        </para></listitem>
-      </varlistentry>
-
-      <varlistentry id="stats.arenas.i.hchunks.j.nmalloc">
-        <term>
-          <mallctl>stats.arenas.&lt;i&gt;.hchunks.&lt;j&gt;.nmalloc</mallctl>
-          (<type>uint64_t</type>)
-          <literal>r-</literal>
-          [<option>--enable-stats</option>]
-        </term>
-        <listitem><para>Cumulative number of allocation requests for this size
-        class served directly by the arena.</para></listitem>
-      </varlistentry>
-
-      <varlistentry id="stats.arenas.i.hchunks.j.ndalloc">
-        <term>
-          <mallctl>stats.arenas.&lt;i&gt;.hchunks.&lt;j&gt;.ndalloc</mallctl>
-          (<type>uint64_t</type>)
-          <literal>r-</literal>
-          [<option>--enable-stats</option>]
-        </term>
-        <listitem><para>Cumulative number of deallocation requests for this
-        size class served directly by the arena.</para></listitem>
-      </varlistentry>
-
-      <varlistentry id="stats.arenas.i.hchunks.j.nrequests">
-        <term>
-          <mallctl>stats.arenas.&lt;i&gt;.hchunks.&lt;j&gt;.nrequests</mallctl>
-          (<type>uint64_t</type>)
-          <literal>r-</literal>
-          [<option>--enable-stats</option>]
-        </term>
-        <listitem><para>Cumulative number of allocation requests for this size
-        class.</para></listitem>
-      </varlistentry>
-
-      <varlistentry id="stats.arenas.i.hchunks.j.curhchunks">
-        <term>
-          <mallctl>stats.arenas.&lt;i&gt;.hchunks.&lt;j&gt;.curhchunks</mallctl>
-          (<type>size_t</type>)
-          <literal>r-</literal>
-          [<option>--enable-stats</option>]
-        </term>
-        <listitem><para>Current number of huge allocations for this size class.
+        <listitem><para>Current number of large allocations for this size class.
         </para></listitem>
       </varlistentry>
     </variablelist>
@@ -2874,9 +2745,10 @@ MAPPED_LIBRARIES:
     <para>To dump core whenever a problem occurs:
       <screen>ln -s 'abort:true' /etc/malloc.conf</screen>
     </para>
-    <para>To specify in the source a chunk size that is 16 MiB:
+    <para>To specify in the source that only one arena should be automatically
+    created:
       <programlisting language="C"><![CDATA[
-malloc_conf = "lg_chunk:24";]]></programlisting></para>
+malloc_conf = "narenas:1";]]></programlisting></para>
   </refsect1>
   <refsect1 id="see_also">
     <title>SEE ALSO</title>

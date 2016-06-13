@@ -24,7 +24,7 @@ typedef struct tcaches_s tcaches_t;
 /*
  * Absolute maximum number of cache slots for each small bin in the thread
  * cache.  This is an additional constraint beyond that imposed as: twice the
- * number of regions per run for this size class.
+ * number of regions per slab for this size class.
  *
  * This constant must be an even number.
  */
@@ -143,7 +143,6 @@ void	tcache_arena_reassociate(tsdn_t *tsdn, tcache_t *tcache,
 tcache_t *tcache_get_hard(tsd_t *tsd);
 tcache_t *tcache_create(tsdn_t *tsdn, arena_t *arena);
 void	tcache_cleanup(tsd_t *tsd);
-void	tcache_enabled_cleanup(tsd_t *tsd);
 void	tcache_stats_merge(tsdn_t *tsdn, tcache_t *tcache, arena_t *arena);
 bool	tcaches_create(tsdn_t *tsdn, unsigned *r_ind);
 void	tcaches_flush(tsd_t *tsd, unsigned ind);
@@ -356,7 +355,7 @@ tcache_alloc_large(tsd_t *tsd, arena_t *arena, tcache_t *tcache, size_t size,
 		if (unlikely(arena == NULL))
 			return (NULL);
 
-		ret = arena_malloc_large(tsd_tsdn(tsd), arena, binind, zero);
+		ret = large_malloc(tsd_tsdn(tsd), arena, s2u(size), zero);
 		if (ret == NULL)
 			return (NULL);
 	} else {
@@ -369,14 +368,6 @@ tcache_alloc_large(tsd_t *tsd, arena_t *arena, tcache_t *tcache, size_t size,
 			assert(usize <= tcache_maxclass);
 		}
 
-		if (config_prof && usize == LARGE_MINCLASS) {
-			arena_chunk_t *chunk =
-			    (arena_chunk_t *)CHUNK_ADDR2BASE(ret);
-			size_t pageind = (((uintptr_t)ret - (uintptr_t)chunk) >>
-			    LG_PAGE);
-			arena_mapbits_large_binind_set(chunk, pageind,
-			    BININD_INVALID);
-		}
 		if (likely(!zero)) {
 			if (slow_path && config_fill) {
 				if (unlikely(opt_junk_alloc)) {
@@ -431,14 +422,13 @@ tcache_dalloc_large(tsd_t *tsd, tcache_t *tcache, void *ptr, size_t size,
 	tcache_bin_t *tbin;
 	tcache_bin_info_t *tbin_info;
 
-	assert((size & PAGE_MASK) == 0);
 	assert(tcache_salloc(tsd_tsdn(tsd), ptr) > SMALL_MAXCLASS);
 	assert(tcache_salloc(tsd_tsdn(tsd), ptr) <= tcache_maxclass);
 
 	binind = size2index(size);
 
 	if (slow_path && config_fill && unlikely(opt_junk_free))
-		arena_dalloc_junk_large(ptr, size);
+		large_dalloc_junk(ptr, size);
 
 	tbin = &tcache->tbins[binind];
 	tbin_info = &tcache_bin_info[binind];

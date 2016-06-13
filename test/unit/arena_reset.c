@@ -28,14 +28,7 @@ static unsigned
 get_nlarge(void)
 {
 
-	return (get_nsizes_impl("arenas.nlruns"));
-}
-
-static unsigned
-get_nhuge(void)
-{
-
-	return (get_nsizes_impl("arenas.nhchunks"));
+	return (get_nsizes_impl("arenas.nlextents"));
 }
 
 static size_t
@@ -68,20 +61,28 @@ static size_t
 get_large_size(size_t ind)
 {
 
-	return (get_size_impl("arenas.lrun.0.size", ind));
+	return (get_size_impl("arenas.lextent.0.size", ind));
 }
 
+/* Like ivsalloc(), but safe to call on discarded allocations. */
 static size_t
-get_huge_size(size_t ind)
+vsalloc(tsdn_t *tsdn, const void *ptr)
 {
+	extent_t *extent;
 
-	return (get_size_impl("arenas.hchunk.0.size", ind));
+	extent = extent_lookup(tsdn, ptr, false);
+	if (extent == NULL)
+		return (0);
+	if (!extent_active_get(extent))
+		return (0);
+
+	return (isalloc(tsdn, extent, ptr));
 }
 
 TEST_BEGIN(test_arena_reset)
 {
-#define	NHUGE	4
-	unsigned arena_ind, nsmall, nlarge, nhuge, nptrs, i;
+#define	NLARGE	32
+	unsigned arena_ind, nsmall, nlarge, nptrs, i;
 	size_t sz, miblen;
 	void **ptrs;
 	int flags;
@@ -95,9 +96,8 @@ TEST_BEGIN(test_arena_reset)
 	flags = MALLOCX_ARENA(arena_ind) | MALLOCX_TCACHE_NONE;
 
 	nsmall = get_nsmall();
-	nlarge = get_nlarge();
-	nhuge = get_nhuge() > NHUGE ? NHUGE : get_nhuge();
-	nptrs = nsmall + nlarge + nhuge;
+	nlarge = get_nlarge() > NLARGE ? NLARGE : get_nlarge();
+	nptrs = nsmall + nlarge;
 	ptrs = (void **)malloc(nptrs * sizeof(void *));
 	assert_ptr_not_null(ptrs, "Unexpected malloc() failure");
 
@@ -114,18 +114,12 @@ TEST_BEGIN(test_arena_reset)
 		assert_ptr_not_null(ptrs[i],
 		    "Unexpected mallocx(%zu, %#x) failure", sz, flags);
 	}
-	for (i = 0; i < nhuge; i++) {
-		sz = get_huge_size(i);
-		ptrs[nsmall + nlarge + i] = mallocx(sz, flags);
-		assert_ptr_not_null(ptrs[i],
-		    "Unexpected mallocx(%zu, %#x) failure", sz, flags);
-	}
 
 	tsdn = tsdn_fetch();
 
 	/* Verify allocations. */
 	for (i = 0; i < nptrs; i++) {
-		assert_zu_gt(ivsalloc(tsdn, ptrs[i], false), 0,
+		assert_zu_gt(ivsalloc(tsdn, ptrs[i]), 0,
 		    "Allocation should have queryable size");
 	}
 
@@ -139,7 +133,7 @@ TEST_BEGIN(test_arena_reset)
 
 	/* Verify allocations no longer exist. */
 	for (i = 0; i < nptrs; i++) {
-		assert_zu_eq(ivsalloc(tsdn, ptrs[i], false), 0,
+		assert_zu_eq(vsalloc(tsdn, ptrs[i]), 0,
 		    "Allocation should no longer exist");
 	}
 

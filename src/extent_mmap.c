@@ -1,15 +1,15 @@
-#define	JEMALLOC_CHUNK_MMAP_C_
+#define	JEMALLOC_EXTENT_MMAP_C_
 #include "jemalloc/internal/jemalloc_internal.h"
 
 /******************************************************************************/
 
 static void *
-chunk_alloc_mmap_slow(size_t size, size_t alignment, bool *zero, bool *commit)
+extent_alloc_mmap_slow(size_t size, size_t alignment, bool *zero, bool *commit)
 {
 	void *ret;
 	size_t alloc_size;
 
-	alloc_size = size + alignment;
+	alloc_size = size + alignment - PAGE;
 	/* Beware size_t wrap-around. */
 	if (alloc_size < size)
 		return (NULL);
@@ -30,7 +30,7 @@ chunk_alloc_mmap_slow(size_t size, size_t alignment, bool *zero, bool *commit)
 }
 
 void *
-chunk_alloc_mmap(void *new_addr, size_t size, size_t alignment, bool *zero,
+extent_alloc_mmap(void *new_addr, size_t size, size_t alignment, bool *zero,
     bool *commit)
 {
 	void *ret;
@@ -50,7 +50,6 @@ chunk_alloc_mmap(void *new_addr, size_t size, size_t alignment, bool *zero,
 	 */
 
 	assert(alignment != 0);
-	assert((alignment & chunksize_mask) == 0);
 
 	ret = pages_map(new_addr, size, commit);
 	if (ret == NULL || ret == new_addr)
@@ -59,7 +58,7 @@ chunk_alloc_mmap(void *new_addr, size_t size, size_t alignment, bool *zero,
 	offset = ALIGNMENT_ADDR2OFFSET(ret, alignment);
 	if (offset != 0) {
 		pages_unmap(ret, size);
-		return (chunk_alloc_mmap_slow(size, alignment, zero, commit));
+		return (extent_alloc_mmap_slow(size, alignment, zero, commit));
 	}
 
 	assert(ret != NULL);
@@ -68,11 +67,10 @@ chunk_alloc_mmap(void *new_addr, size_t size, size_t alignment, bool *zero,
 }
 
 bool
-chunk_dalloc_mmap(void *chunk, size_t size)
+extent_dalloc_mmap(void *addr, size_t size)
 {
 
 	if (config_munmap)
-		pages_unmap(chunk, size);
-
+		pages_unmap(addr, size);
 	return (!config_munmap);
 }

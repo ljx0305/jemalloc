@@ -8,10 +8,12 @@ hmin(unsigned ha, unsigned hb)
 	return (ha < hb ? ha : hb);
 }
 
-/* Only the most significant bits of keys passed to rtree_[gs]et() are used. */
+/*
+ * Only the most significant bits of keys passed to rtree_{read,write}() are
+ * used.
+ */
 bool
-rtree_new(rtree_t *rtree, unsigned bits, rtree_node_alloc_t *alloc,
-    rtree_node_dalloc_t *dalloc)
+rtree_new(rtree_t *rtree, unsigned bits)
 {
 	unsigned bits_in_leaf, height, i;
 
@@ -29,8 +31,6 @@ rtree_new(rtree_t *rtree, unsigned bits, rtree_node_alloc_t *alloc,
 		height = 1;
 	assert((height-1) * RTREE_BITS_PER_LEVEL + bits_in_leaf == bits);
 
-	rtree->alloc = alloc;
-	rtree->dalloc = dalloc;
 	rtree->height = height;
 
 	/* Root level. */
@@ -52,17 +52,53 @@ rtree_new(rtree_t *rtree, unsigned bits, rtree_node_alloc_t *alloc,
 		rtree->levels[height-1].cumbits = bits;
 	}
 
-	/* Compute lookup table to be used by rtree_start_level(). */
+	/* Compute lookup table to be used by rtree_[ctx_]start_level(). */
 	for (i = 0; i < RTREE_HEIGHT_MAX; i++) {
 		rtree->start_level[i] = hmin(RTREE_HEIGHT_MAX - 1 - i, height -
 		    1);
 	}
+	rtree->start_level[RTREE_HEIGHT_MAX] = 0;
 
 	return (false);
 }
 
+#ifdef JEMALLOC_JET
+#undef rtree_node_alloc
+#define	rtree_node_alloc JEMALLOC_N(rtree_node_alloc_impl)
+#endif
+static rtree_elm_t *
+rtree_node_alloc(tsdn_t *tsdn, rtree_t *rtree, size_t nelms)
+{
+
+	return ((rtree_elm_t *)base_alloc(tsdn, nelms * sizeof(rtree_elm_t)));
+}
+#ifdef JEMALLOC_JET
+#undef rtree_node_alloc
+#define	rtree_node_alloc JEMALLOC_N(rtree_node_alloc)
+rtree_node_alloc_t *rtree_node_alloc = JEMALLOC_N(rtree_node_alloc_impl);
+#endif
+
+#ifdef JEMALLOC_JET
+#undef rtree_node_dalloc
+#define	rtree_node_dalloc JEMALLOC_N(rtree_node_dalloc_impl)
+#endif
+UNUSED static void
+rtree_node_dalloc(tsdn_t *tsdn, rtree_t *rtree, rtree_elm_t *node)
+{
+
+	/* Nodes are never deleted during normal operation. */
+	not_reached();
+}
+#ifdef JEMALLOC_JET
+#undef rtree_node_dalloc
+#define	rtree_node_dalloc JEMALLOC_N(rtree_node_dalloc)
+rtree_node_dalloc_t *rtree_node_dalloc = JEMALLOC_N(rtree_node_dalloc_impl);
+#endif
+
+#ifdef JEMALLOC_JET
 static void
-rtree_delete_subtree(rtree_t *rtree, rtree_node_elm_t *node, unsigned level)
+rtree_delete_subtree(tsdn_t *tsdn, rtree_t *rtree, rtree_elm_t *node,
+    unsigned level)
 {
 
 	if (level + 1 < rtree->height) {
@@ -70,30 +106,34 @@ rtree_delete_subtree(rtree_t *rtree, rtree_node_elm_t *node, unsigned level)
 
 		nchildren = ZU(1) << rtree->levels[level].bits;
 		for (i = 0; i < nchildren; i++) {
-			rtree_node_elm_t *child = node[i].child;
-			if (child != NULL)
-				rtree_delete_subtree(rtree, child, level + 1);
+			rtree_elm_t *child = node[i].child;
+			if (child != NULL) {
+				rtree_delete_subtree(tsdn, rtree, child, level +
+				    1);
+			}
 		}
 	}
-	rtree->dalloc(node);
+	rtree_node_dalloc(tsdn, rtree, node);
 }
 
 void
-rtree_delete(rtree_t *rtree)
+rtree_delete(tsdn_t *tsdn, rtree_t *rtree)
 {
 	unsigned i;
 
 	for (i = 0; i < rtree->height; i++) {
-		rtree_node_elm_t *subtree = rtree->levels[i].subtree;
+		rtree_elm_t *subtree = rtree->levels[i].subtree;
 		if (subtree != NULL)
-			rtree_delete_subtree(rtree, subtree, i);
+			rtree_delete_subtree(tsdn, rtree, subtree, i);
 	}
 }
+#endif
 
-static rtree_node_elm_t *
-rtree_node_init(rtree_t *rtree, unsigned level, rtree_node_elm_t **elmp)
+static rtree_elm_t *
+rtree_node_init(tsdn_t *tsdn, rtree_t *rtree, unsigned level,
+    rtree_elm_t **elmp)
 {
-	rtree_node_elm_t *node;
+	rtree_elm_t *node;
 
 	if (atomic_cas_p((void **)elmp, NULL, RTREE_NODE_INITIALIZING)) {
 		/*
@@ -105,7 +145,8 @@ rtree_node_init(rtree_t *rtree, unsigned level, rtree_node_elm_t **elmp)
 			node = atomic_read_p((void **)elmp);
 		} while (node == RTREE_NODE_INITIALIZING);
 	} else {
-		node = rtree->alloc(ZU(1) << rtree->levels[level].bits);
+		node = rtree_node_alloc(tsdn, rtree, ZU(1) <<
+		    rtree->levels[level].bits);
 		if (node == NULL)
 			return (NULL);
 		atomic_write_p((void **)elmp, node);
@@ -114,16 +155,134 @@ rtree_node_init(rtree_t *rtree, unsigned level, rtree_node_elm_t **elmp)
 	return (node);
 }
 
-rtree_node_elm_t *
-rtree_subtree_read_hard(rtree_t *rtree, unsigned level)
+rtree_elm_t *
+rtree_subtree_read_hard(tsdn_t *tsdn, rtree_t *rtree, unsigned level)
 {
 
-	return (rtree_node_init(rtree, level, &rtree->levels[level].subtree));
+	return (rtree_node_init(tsdn, rtree, level,
+	    &rtree->levels[level].subtree));
 }
 
-rtree_node_elm_t *
-rtree_child_read_hard(rtree_t *rtree, rtree_node_elm_t *elm, unsigned level)
+rtree_elm_t *
+rtree_child_read_hard(tsdn_t *tsdn, rtree_t *rtree, rtree_elm_t *elm,
+    unsigned level)
 {
 
-	return (rtree_node_init(rtree, level, &elm->child));
+	return (rtree_node_init(tsdn, rtree, level, &elm->child));
+}
+
+static int
+rtree_elm_witness_comp(const witness_t *a, void *oa, const witness_t *b,
+    void *ob)
+{
+	uintptr_t ka = (uintptr_t)oa;
+	uintptr_t kb = (uintptr_t)ob;
+
+	assert(ka != 0);
+	assert(kb != 0);
+
+	return ((ka > kb) - (ka < kb));
+}
+
+static witness_t *
+rtree_elm_witness_alloc(tsd_t *tsd, uintptr_t key, const rtree_elm_t *elm)
+{
+	witness_t *witness;
+	size_t i;
+	rtree_elm_witness_tsd_t *witnesses = tsd_rtree_elm_witnessesp_get(tsd);
+
+	/* Iterate over entire array to detect double allocation attempts. */
+	witness = NULL;
+	for (i = 0; i < sizeof(rtree_elm_witness_tsd_t) / sizeof(witness_t);
+	    i++) {
+		rtree_elm_witness_t *rew = &witnesses->witnesses[i];
+
+		assert(rew->elm != elm);
+		if (rew->elm == NULL && witness == NULL) {
+			rew->elm = elm;
+			witness = &rew->witness;
+			witness_init(witness, "rtree_elm",
+			    WITNESS_RANK_RTREE_ELM, rtree_elm_witness_comp,
+			    (void *)key);
+		}
+	}
+	assert(witness != NULL);
+	return (witness);
+}
+
+static witness_t *
+rtree_elm_witness_find(tsd_t *tsd, const rtree_elm_t *elm)
+{
+	size_t i;
+	rtree_elm_witness_tsd_t *witnesses = tsd_rtree_elm_witnessesp_get(tsd);
+
+	for (i = 0; i < sizeof(rtree_elm_witness_tsd_t) / sizeof(witness_t);
+	    i++) {
+		rtree_elm_witness_t *rew = &witnesses->witnesses[i];
+
+		if (rew->elm == elm)
+			return (&rew->witness);
+	}
+	not_reached();
+}
+
+static void
+rtree_elm_witness_dalloc(tsd_t *tsd, witness_t *witness, const rtree_elm_t *elm)
+{
+	size_t i;
+	rtree_elm_witness_tsd_t *witnesses = tsd_rtree_elm_witnessesp_get(tsd);
+
+	for (i = 0; i < sizeof(rtree_elm_witness_tsd_t) / sizeof(witness_t);
+	    i++) {
+		rtree_elm_witness_t *rew = &witnesses->witnesses[i];
+
+		if (rew->elm == elm) {
+			rew->elm = NULL;
+			witness_init(&rew->witness, "rtree_elm",
+			    WITNESS_RANK_RTREE_ELM, rtree_elm_witness_comp,
+			    NULL);
+			    return;
+		}
+	}
+	not_reached();
+}
+
+void
+rtree_elm_witness_acquire(tsdn_t *tsdn, const rtree_t *rtree, uintptr_t key,
+    const rtree_elm_t *elm)
+{
+	witness_t *witness;
+
+	if (tsdn_null(tsdn))
+		return;
+
+	witness = rtree_elm_witness_alloc(tsdn_tsd(tsdn), key, elm);
+	witness_lock(tsdn, witness);
+}
+
+void
+rtree_elm_witness_access(tsdn_t *tsdn, const rtree_t *rtree,
+    const rtree_elm_t *elm)
+{
+	witness_t *witness;
+
+	if (tsdn_null(tsdn))
+		return;
+
+	witness = rtree_elm_witness_find(tsdn_tsd(tsdn), elm);
+	witness_assert_owner(tsdn, witness);
+}
+
+void
+rtree_elm_witness_release(tsdn_t *tsdn, const rtree_t *rtree,
+    const rtree_elm_t *elm)
+{
+	witness_t *witness;
+
+	if (tsdn_null(tsdn))
+		return;
+
+	witness = rtree_elm_witness_find(tsdn_tsd(tsdn), elm);
+	witness_unlock(tsdn, witness);
+	rtree_elm_witness_dalloc(tsdn_tsd(tsdn), witness, elm);
 }

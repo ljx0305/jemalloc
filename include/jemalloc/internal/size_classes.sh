@@ -50,7 +50,7 @@ reg_size_compute() {
   reg_size=$((${grp} + ${delta}*${ndelta}))
 }
 
-run_size() {
+slab_size() {
   lg_p=$1
   lg_grp=$2
   lg_delta=$3
@@ -59,22 +59,22 @@ run_size() {
   pow2 ${lg_p}; p=${pow2_result}
   reg_size_compute ${lg_grp} ${lg_delta} ${ndelta}
 
-  # Compute smallest run size that is an integer multiple of reg_size.
-  try_run_size=${p}
-  try_nregs=$((${try_run_size} / ${reg_size}))
+  # Compute smallest slab size that is an integer multiple of reg_size.
+  try_slab_size=${p}
+  try_nregs=$((${try_slab_size} / ${reg_size}))
   perfect=0
   while [ ${perfect} -eq 0 ] ; do
-    perfect_run_size=${try_run_size}
+    perfect_slab_size=${try_slab_size}
     perfect_nregs=${try_nregs}
 
-    try_run_size=$((${try_run_size} + ${p}))
-    try_nregs=$((${try_run_size} / ${reg_size}))
-    if [ ${perfect_run_size} -eq $((${perfect_nregs} * ${reg_size})) ] ; then
+    try_slab_size=$((${try_slab_size} + ${p}))
+    try_nregs=$((${try_slab_size} / ${reg_size}))
+    if [ ${perfect_slab_size} -eq $((${perfect_nregs} * ${reg_size})) ] ; then
       perfect=1
     fi
   done
 
-  run_size_pgs=$((${perfect_run_size} / ${p}))
+  slab_size_pgs=$((${perfect_slab_size} / ${p}))
 }
 
 size_class() {
@@ -117,7 +117,7 @@ size_class() {
 
   if [ ${lg_size} -lt $((${lg_p} + ${lg_g})) ] ; then
     bin="yes"
-    run_size ${lg_p} ${lg_grp} ${lg_delta} ${ndelta}; pgs=${run_size_pgs}
+    slab_size ${lg_p} ${lg_grp} ${lg_delta} ${ndelta}; pgs=${slab_size_pgs}
   else
     bin="no"
     pgs=0
@@ -237,7 +237,7 @@ size_classes() {
         fi
       fi
       # Final written value is correct:
-      huge_maxclass="((((size_t)1) << ${lg_grp}) + (((size_t)${ndelta}) << ${lg_delta}))"
+      large_maxclass="((((size_t)1) << ${lg_grp}) + (((size_t)${ndelta}) << ${lg_delta}))"
       index=$((${index} + 1))
       ndelta=$((${ndelta} + 1))
     done
@@ -257,7 +257,7 @@ size_classes() {
   # - lookup_maxclass
   # - small_maxclass
   # - lg_large_minclass
-  # - huge_maxclass
+  # - large_maxclass
 }
 
 cat <<EOF
@@ -278,7 +278,7 @@ cat <<EOF
  *     ndelta: Delta multiplier.  size == 1<<lg_grp + ndelta<<lg_delta
  *     psz: 'yes' if a multiple of the page size, 'no' otherwise.
  *     bin: 'yes' if a small bin size class, 'no' otherwise.
- *     pgs: Run page count if a small bin size class, 0 otherwise.
+ *     pgs: Slab page count if a small bin size class, 0 otherwise.
  *     lg_delta_lookup: Same as lg_delta if a lookup table size class, 'no'
  *                      otherwise.
  *   NTBINS: Number of tiny bins.
@@ -290,7 +290,7 @@ cat <<EOF
  *   LOOKUP_MAXCLASS: Maximum size class included in lookup table.
  *   SMALL_MAXCLASS: Maximum small size class.
  *   LG_LARGE_MINCLASS: Lg of minimum large size class.
- *   HUGE_MAXCLASS: Maximum (huge) size class.
+ *   LARGE_MAXCLASS: Maximum (large) size class.
  */
 
 #define	LG_SIZE_CLASS_GROUP	${lg_g}
@@ -315,7 +315,7 @@ for lg_z in ${lg_zarr} ; do
         echo "#define	LOOKUP_MAXCLASS		${lookup_maxclass}"
         echo "#define	SMALL_MAXCLASS		${small_maxclass}"
         echo "#define	LG_LARGE_MINCLASS	${lg_large_minclass}"
-        echo "#define	HUGE_MAXCLASS		${huge_maxclass}"
+        echo "#define	LARGE_MAXCLASS		${large_maxclass}"
         echo "#endif"
         echo
       done
@@ -331,11 +331,9 @@ cat <<EOF
 #undef SIZE_CLASSES_DEFINED
 /*
  * The size2index_tab lookup table uses uint8_t to encode each bin index, so we
- * cannot support more than 256 small size classes.  Further constrain NBINS to
- * 255 since all small size classes, plus a "not small" size class must be
- * stored in 8 bits of arena_chunk_map_bits_t's bits field.
+ * cannot support more than 256 small size classes.
  */
-#if (NBINS > 255)
+#if (NBINS > 256)
 #  error "Too many small size classes"
 #endif
 

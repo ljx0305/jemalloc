@@ -1,6 +1,6 @@
 #include "test/jemalloc_test.h"
 
-const char *malloc_conf = "purge:decay,decay_time:1";
+const char *malloc_conf = "purge:decay,decay_time:1,lg_tcache_max:0";
 
 static nstime_update_t *nstime_update_orig;
 
@@ -22,7 +22,7 @@ TEST_BEGIN(test_decay_ticks)
 {
 	ticker_t *decay_ticker;
 	unsigned tick0, tick1;
-	size_t sz, huge0, large0;
+	size_t sz, large0;
 	void *p;
 
 	test_skip_if(opt_purge != purge_mode_decay);
@@ -32,20 +32,18 @@ TEST_BEGIN(test_decay_ticks)
 	    "Unexpected failure getting decay ticker");
 
 	sz = sizeof(size_t);
-	assert_d_eq(mallctl("arenas.hchunk.0.size", &huge0, &sz, NULL, 0), 0,
-	    "Unexpected mallctl failure");
-	assert_d_eq(mallctl("arenas.lrun.0.size", &large0, &sz, NULL, 0), 0,
+	assert_d_eq(mallctl("arenas.lextent.0.size", &large0, &sz, NULL, 0), 0,
 	    "Unexpected mallctl failure");
 
 	/*
-	 * Test the standard APIs using a huge size class, since we can't
-	 * control tcache interactions (except by completely disabling tcache
-	 * for the entire test program).
+	 * Test the standard APIs using a large size class, since we can't
+	 * control tcache interactions for small size classes (except by
+	 * completely disabling tcache for the entire test program).
 	 */
 
 	/* malloc(). */
 	tick0 = ticker_read(decay_ticker);
-	p = malloc(huge0);
+	p = malloc(large0);
 	assert_ptr_not_null(p, "Unexpected malloc() failure");
 	tick1 = ticker_read(decay_ticker);
 	assert_u32_ne(tick1, tick0, "Expected ticker to tick during malloc()");
@@ -57,7 +55,7 @@ TEST_BEGIN(test_decay_ticks)
 
 	/* calloc(). */
 	tick0 = ticker_read(decay_ticker);
-	p = calloc(1, huge0);
+	p = calloc(1, large0);
 	assert_ptr_not_null(p, "Unexpected calloc() failure");
 	tick1 = ticker_read(decay_ticker);
 	assert_u32_ne(tick1, tick0, "Expected ticker to tick during calloc()");
@@ -65,7 +63,7 @@ TEST_BEGIN(test_decay_ticks)
 
 	/* posix_memalign(). */
 	tick0 = ticker_read(decay_ticker);
-	assert_d_eq(posix_memalign(&p, sizeof(size_t), huge0), 0,
+	assert_d_eq(posix_memalign(&p, sizeof(size_t), large0), 0,
 	    "Unexpected posix_memalign() failure");
 	tick1 = ticker_read(decay_ticker);
 	assert_u32_ne(tick1, tick0,
@@ -74,7 +72,7 @@ TEST_BEGIN(test_decay_ticks)
 
 	/* aligned_alloc(). */
 	tick0 = ticker_read(decay_ticker);
-	p = aligned_alloc(sizeof(size_t), huge0);
+	p = aligned_alloc(sizeof(size_t), large0);
 	assert_ptr_not_null(p, "Unexpected aligned_alloc() failure");
 	tick1 = ticker_read(decay_ticker);
 	assert_u32_ne(tick1, tick0,
@@ -84,13 +82,13 @@ TEST_BEGIN(test_decay_ticks)
 	/* realloc(). */
 	/* Allocate. */
 	tick0 = ticker_read(decay_ticker);
-	p = realloc(NULL, huge0);
+	p = realloc(NULL, large0);
 	assert_ptr_not_null(p, "Unexpected realloc() failure");
 	tick1 = ticker_read(decay_ticker);
 	assert_u32_ne(tick1, tick0, "Expected ticker to tick during realloc()");
 	/* Reallocate. */
 	tick0 = ticker_read(decay_ticker);
-	p = realloc(p, huge0);
+	p = realloc(p, large0);
 	assert_ptr_not_null(p, "Unexpected realloc() failure");
 	tick1 = ticker_read(decay_ticker);
 	assert_u32_ne(tick1, tick0, "Expected ticker to tick during realloc()");
@@ -101,15 +99,14 @@ TEST_BEGIN(test_decay_ticks)
 	assert_u32_ne(tick1, tick0, "Expected ticker to tick during realloc()");
 
 	/*
-	 * Test the *allocx() APIs using huge, large, and small size classes,
-	 * with tcache explicitly disabled.
+	 * Test the *allocx() APIs using large and small size classes, with
+	 * tcache explicitly disabled.
 	 */
 	{
 		unsigned i;
-		size_t allocx_sizes[3];
-		allocx_sizes[0] = huge0;
-		allocx_sizes[1] = large0;
-		allocx_sizes[2] = 1;
+		size_t allocx_sizes[2];
+		allocx_sizes[0] = large0;
+		allocx_sizes[1] = 1;
 
 		for (i = 0; i < sizeof(allocx_sizes) / sizeof(size_t); i++) {
 			sz = allocx_sizes[i];
@@ -225,8 +222,8 @@ TEST_BEGIN(test_decay_ticker)
 		large = nallocx(tcache_max + 1, flags);
 	}  else {
 		sz = sizeof(size_t);
-		assert_d_eq(mallctl("arenas.lrun.0.size", &large, &sz, NULL, 0),
-		    0, "Unexpected mallctl failure");
+		assert_d_eq(mallctl("arenas.lextent.0.size", &large, &sz, NULL,
+		    0), 0, "Unexpected mallctl failure");
 	}
 
 	assert_d_eq(mallctl("arena.0.purge", NULL, NULL, NULL, 0), 0,
@@ -302,7 +299,7 @@ TEST_BEGIN(test_decay_nonmonotonic)
 	test_skip_if(opt_purge != purge_mode_decay);
 
 	sz = sizeof(size_t);
-	assert_d_eq(mallctl("arenas.lrun.0.size", &large0, &sz, NULL, 0), 0,
+	assert_d_eq(mallctl("arenas.lextent.0.size", &large0, &sz, NULL, 0), 0,
 	    "Unexpected mallctl failure");
 
 	assert_d_eq(mallctl("arena.0.purge", NULL, NULL, NULL, 0), 0,
