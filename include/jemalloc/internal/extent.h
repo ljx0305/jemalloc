@@ -99,6 +99,9 @@ size_t	extent_size_quantize_ceil(size_t size);
 
 ph_proto(, extent_heap_, extent_heap_t, extent_t)
 
+extent_t	*extent_alloc_cache_locked(tsdn_t *tsdn, arena_t *arena,
+    extent_hooks_t **r_extent_hooks, void *new_addr, size_t usize, size_t pad,
+    size_t alignment, bool *zero, bool slab);
 extent_t	*extent_alloc_cache(tsdn_t *tsdn, arena_t *arena,
     extent_hooks_t **r_extent_hooks, void *new_addr, size_t usize, size_t pad,
     size_t alignment, bool *zero, bool slab);
@@ -224,22 +227,23 @@ JEMALLOC_INLINE void *
 extent_before_get(const extent_t *extent)
 {
 
-	return ((void *)((uintptr_t)extent->e_addr - PAGE));
+	return ((void *)((uintptr_t)extent_base_get(extent) - PAGE));
 }
 
 JEMALLOC_INLINE void *
 extent_last_get(const extent_t *extent)
 {
 
-	return ((void *)((uintptr_t)extent->e_addr + extent_size_get(extent) -
-	    PAGE));
+	return ((void *)((uintptr_t)extent_base_get(extent) +
+	    extent_size_get(extent) - PAGE));
 }
 
 JEMALLOC_INLINE void *
 extent_past_get(const extent_t *extent)
 {
 
-	return ((void *)((uintptr_t)extent->e_addr + extent_size_get(extent)));
+	return ((void *)((uintptr_t)extent_base_get(extent) +
+	    extent_size_get(extent)));
 }
 
 JEMALLOC_INLINE bool

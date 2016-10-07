@@ -145,6 +145,7 @@ extent_addr_randomize
 extent_addr_set
 extent_alloc
 extent_alloc_cache
+extent_alloc_cache_locked
 extent_alloc_dss
 extent_alloc_mmap
 extent_alloc_wrapper
@@ -394,6 +395,8 @@ prof_thread_active_set
 prof_thread_name_get
 prof_thread_name_set
 psz2ind
+psz2ind_clamp
+psz2ind_impl
 psz2u
 purge_mode_names
 register_zone
