@@ -34,10 +34,6 @@ arena_extent_ralloc_large_shrink
 arena_get
 arena_ichoose
 arena_init
-arena_lg_dirty_mult_default_get
-arena_lg_dirty_mult_default_set
-arena_lg_dirty_mult_get
-arena_lg_dirty_mult_set
 arena_malloc
 arena_malloc_hard
 arena_maybe_purge
@@ -114,10 +110,6 @@ bootstrap_free
 bootstrap_malloc
 bt_init
 buferror
-chunk_boot
-chunk_npages
-chunksize
-chunksize_mask
 ckh_count
 ckh_delete
 ckh_insert
@@ -164,11 +156,9 @@ extent_dalloc_mmap
 extent_dalloc_wrapper
 extent_decommit_wrapper
 extent_dss_boot
-extent_dss_postfork_child
-extent_dss_postfork_parent
+extent_dss_mergeable
 extent_dss_prec_get
 extent_dss_prec_set
-extent_dss_prefork
 extent_heap_empty
 extent_heap_first
 extent_heap_insert
@@ -184,9 +174,6 @@ extent_last_get
 extent_lookup
 extent_merge_wrapper
 extent_past_get
-extent_postfork_child
-extent_postfork_parent
-extent_prefork
 extent_prof_tctx_get
 extent_prof_tctx_set
 extent_purge_wrapper
@@ -298,6 +285,7 @@ nstime_idivide
 nstime_imultiply
 nstime_init
 nstime_init2
+nstime_monotonic
 nstime_ns
 nstime_nsec
 nstime_sec
@@ -309,8 +297,6 @@ opt_dss
 opt_junk
 opt_junk_alloc
 opt_junk_free
-opt_lg_chunk
-opt_lg_dirty_mult
 opt_lg_prof_interval
 opt_lg_prof_sample
 opt_lg_tcache_max
@@ -323,7 +309,6 @@ opt_prof_gdump
 opt_prof_leak
 opt_prof_prefix
 opt_prof_thread_active_init
-opt_purge
 opt_stats_print
 opt_tcache
 opt_utrace
@@ -398,7 +383,6 @@ psz2ind
 psz2ind_clamp
 psz2ind_impl
 psz2u
-purge_mode_names
 register_zone
 rtree_child_read
 rtree_child_read_hard
@@ -436,10 +420,6 @@ size2index
 size2index_compute
 size2index_lookup
 size2index_tab
-stats_cactive
-stats_cactive_add
-stats_cactive_get
-stats_cactive_sub
 stats_print
 tcache_alloc_easy
 tcache_alloc_large
@@ -491,7 +471,9 @@ tsd_booted_get
 tsd_cleanup
 tsd_cleanup_wrapper
 tsd_fetch
+tsd_fetch_impl
 tsd_get
+tsd_get_allocates
 tsd_iarena_get
 tsd_iarena_set
 tsd_iarenap_get

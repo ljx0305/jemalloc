@@ -1,21 +1,29 @@
 #include "test/jemalloc_test.h"
 
-const char *malloc_conf = "purge:decay,decay_time:1,lg_tcache_max:0";
+const char *malloc_conf = "decay_time:1,lg_tcache_max:0";
 
+static nstime_monotonic_t *nstime_monotonic_orig;
 static nstime_update_t *nstime_update_orig;
 
 static unsigned nupdates_mock;
 static nstime_t time_mock;
-static bool nonmonotonic_mock;
+static bool monotonic_mock;
+
+static bool
+nstime_monotonic_mock(void)
+{
+
+	return (monotonic_mock);
+}
 
 static bool
 nstime_update_mock(nstime_t *time)
 {
 
 	nupdates_mock++;
-	if (!nonmonotonic_mock)
+	if (monotonic_mock)
 		nstime_copy(time, &time_mock);
-	return (nonmonotonic_mock);
+	return (!monotonic_mock);
 }
 
 TEST_BEGIN(test_decay_ticks)
@@ -24,8 +32,6 @@ TEST_BEGIN(test_decay_ticks)
 	unsigned tick0, tick1;
 	size_t sz, large0;
 	void *p;
-
-	test_skip_if(opt_purge != purge_mode_decay);
 
 	decay_ticker = decay_ticker_get(tsd_fetch(), 0);
 	assert_ptr_not_null(decay_ticker,
@@ -205,8 +211,6 @@ TEST_BEGIN(test_decay_ticker)
 	unsigned i, nupdates0;
 	nstime_t time, decay_time, deadline;
 
-	test_skip_if(opt_purge != purge_mode_decay);
-
 	/*
 	 * Allocate a bunch of large objects, pause the clock, deallocate the
 	 * objects, restore the clock, then [md]allocx() in a tight loop to
@@ -242,9 +246,11 @@ TEST_BEGIN(test_decay_ticker)
 	nupdates_mock = 0;
 	nstime_init(&time_mock, 0);
 	nstime_update(&time_mock);
-	nonmonotonic_mock = false;
+	monotonic_mock = true;
 
+	nstime_monotonic_orig = nstime_monotonic;
 	nstime_update_orig = nstime_update;
+	nstime_monotonic = nstime_monotonic_mock;
 	nstime_update = nstime_update_mock;
 
 	for (i = 0; i < NPS; i++) {
@@ -256,6 +262,7 @@ TEST_BEGIN(test_decay_ticker)
 		    "Expected nstime_update() to be called");
 	}
 
+	nstime_monotonic = nstime_monotonic_orig;
 	nstime_update = nstime_update_orig;
 
 	nstime_init(&time, 0);
@@ -296,8 +303,6 @@ TEST_BEGIN(test_decay_nonmonotonic)
 	size_t sz, large0;
 	unsigned i, nupdates0;
 
-	test_skip_if(opt_purge != purge_mode_decay);
-
 	sz = sizeof(size_t);
 	assert_d_eq(mallctl("arenas.lextent.0.size", &large0, &sz, NULL, 0), 0,
 	    "Unexpected mallctl failure");
@@ -313,9 +318,11 @@ TEST_BEGIN(test_decay_nonmonotonic)
 	nupdates_mock = 0;
 	nstime_init(&time_mock, 0);
 	nstime_update(&time_mock);
-	nonmonotonic_mock = true;
+	monotonic_mock = false;
 
+	nstime_monotonic_orig = nstime_monotonic;
 	nstime_update_orig = nstime_update;
+	nstime_monotonic = nstime_monotonic_mock;
 	nstime_update = nstime_update_mock;
 
 	for (i = 0; i < NPS; i++) {
@@ -339,8 +346,9 @@ TEST_BEGIN(test_decay_nonmonotonic)
 	    config_stats ? 0 : ENOENT, "Unexpected mallctl result");
 
 	if (config_stats)
-		assert_u64_gt(npurge1, npurge0, "Expected purging to occur");
+		assert_u64_eq(npurge0, npurge1, "Unexpected purging occurred");
 
+	nstime_monotonic = nstime_monotonic_orig;
 	nstime_update = nstime_update_orig;
 #undef NPS
 }

@@ -346,6 +346,7 @@ typedef unsigned szind_t;
 #include "jemalloc/internal/nstime.h"
 #include "jemalloc/internal/util.h"
 #include "jemalloc/internal/atomic.h"
+#include "jemalloc/internal/spin.h"
 #include "jemalloc/internal/prng.h"
 #include "jemalloc/internal/ticker.h"
 #include "jemalloc/internal/ckh.h"
@@ -363,7 +364,6 @@ typedef unsigned szind_t;
 #include "jemalloc/internal/base.h"
 #include "jemalloc/internal/rtree.h"
 #include "jemalloc/internal/pages.h"
-#include "jemalloc/internal/chunk.h"
 #include "jemalloc/internal/large.h"
 #include "jemalloc/internal/tcache.h"
 #include "jemalloc/internal/hash.h"
@@ -376,6 +376,7 @@ typedef unsigned szind_t;
 #include "jemalloc/internal/nstime.h"
 #include "jemalloc/internal/util.h"
 #include "jemalloc/internal/atomic.h"
+#include "jemalloc/internal/spin.h"
 #include "jemalloc/internal/prng.h"
 #include "jemalloc/internal/ticker.h"
 #include "jemalloc/internal/ckh.h"
@@ -397,7 +398,6 @@ typedef unsigned szind_t;
 #include "jemalloc/internal/base.h"
 #include "jemalloc/internal/rtree.h"
 #include "jemalloc/internal/pages.h"
-#include "jemalloc/internal/chunk.h"
 #include "jemalloc/internal/large.h"
 #include "jemalloc/internal/tcache.h"
 #include "jemalloc/internal/hash.h"
@@ -467,6 +467,7 @@ void	jemalloc_postfork_child(void);
 #include "jemalloc/internal/nstime.h"
 #include "jemalloc/internal/util.h"
 #include "jemalloc/internal/atomic.h"
+#include "jemalloc/internal/spin.h"
 #include "jemalloc/internal/prng.h"
 #include "jemalloc/internal/ticker.h"
 #include "jemalloc/internal/ckh.h"
@@ -483,7 +484,6 @@ void	jemalloc_postfork_child(void);
 #include "jemalloc/internal/base.h"
 #include "jemalloc/internal/rtree.h"
 #include "jemalloc/internal/pages.h"
-#include "jemalloc/internal/chunk.h"
 #include "jemalloc/internal/large.h"
 #include "jemalloc/internal/tcache.h"
 #include "jemalloc/internal/hash.h"
@@ -497,6 +497,7 @@ void	jemalloc_postfork_child(void);
 #include "jemalloc/internal/nstime.h"
 #include "jemalloc/internal/util.h"
 #include "jemalloc/internal/atomic.h"
+#include "jemalloc/internal/spin.h"
 #include "jemalloc/internal/prng.h"
 #include "jemalloc/internal/ticker.h"
 #include "jemalloc/internal/ckh.h"
@@ -512,7 +513,6 @@ void	jemalloc_postfork_child(void);
 #include "jemalloc/internal/extent.h"
 #include "jemalloc/internal/base.h"
 #include "jemalloc/internal/pages.h"
-#include "jemalloc/internal/chunk.h"
 #include "jemalloc/internal/large.h"
 
 #ifndef JEMALLOC_ENABLE_INLINE
@@ -535,7 +535,7 @@ size_t	s2u(size_t size);
 size_t	sa2u(size_t size, size_t alignment);
 arena_t	*arena_choose_impl(tsd_t *tsd, arena_t *arena, bool internal);
 arena_t	*arena_choose(tsd_t *tsd, arena_t *arena);
-arena_t	*arena_ichoose(tsdn_t *tsdn, arena_t *arena);
+arena_t	*arena_ichoose(tsd_t *tsd, arena_t *arena);
 arena_tdata_t	*arena_tdata_get(tsd_t *tsd, unsigned ind,
     bool refresh_if_missing);
 arena_t	*arena_get(tsdn_t *tsdn, unsigned ind, bool init_if_missing);
@@ -862,14 +862,10 @@ arena_choose(tsd_t *tsd, arena_t *arena)
 }
 
 JEMALLOC_INLINE arena_t *
-arena_ichoose(tsdn_t *tsdn, arena_t *arena)
+arena_ichoose(tsd_t *tsd, arena_t *arena)
 {
 
-	assert(!tsdn_null(tsdn) || arena != NULL);
-
-	if (!tsdn_null(tsdn))
-		return (arena_choose_impl(tsdn_tsd(tsdn), NULL, true));
-	return (arena);
+	return (arena_choose_impl(tsd, arena, true));
 }
 
 JEMALLOC_INLINE arena_tdata_t *

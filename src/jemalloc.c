@@ -1024,16 +1024,13 @@ malloc_conf_init(void)
 			}
 
 			CONF_HANDLE_BOOL(opt_abort, "abort", true)
-			CONF_HANDLE_SIZE_T(opt_lg_chunk, "lg_chunk", LG_PAGE,
-			    (sizeof(size_t) << 3) - 1, true)
 			if (strncmp("dss", k, klen) == 0) {
 				int i;
 				bool match = false;
 				for (i = 0; i < dss_prec_limit; i++) {
 					if (strncmp(dss_prec_names[i], v, vlen)
 					    == 0) {
-						if (extent_dss_prec_set(NULL,
-						   i)) {
+						if (extent_dss_prec_set(i)) {
 							malloc_conf_error(
 							    "Error setting dss",
 							    k, klen, v, vlen);
@@ -1053,25 +1050,6 @@ malloc_conf_init(void)
 			}
 			CONF_HANDLE_UNSIGNED(opt_narenas, "narenas", 1,
 			    UINT_MAX, false)
-			if (strncmp("purge", k, klen) == 0) {
-				int i;
-				bool match = false;
-				for (i = 0; i < purge_mode_limit; i++) {
-					if (strncmp(purge_mode_names[i], v,
-					    vlen) == 0) {
-						opt_purge = (purge_mode_t)i;
-						match = true;
-						break;
-					}
-				}
-				if (!match) {
-					malloc_conf_error("Invalid conf value",
-					    k, klen, v, vlen);
-				}
-				continue;
-			}
-			CONF_HANDLE_SSIZE_T(opt_lg_dirty_mult, "lg_dirty_mult",
-			    -1, (sizeof(size_t) << 3) - 1)
 			CONF_HANDLE_SSIZE_T(opt_decay_time, "decay_time", -1,
 			    NSTIME_SEC_MAX);
 			CONF_HANDLE_BOOL(opt_stats_print, "stats_print", true)
@@ -1163,10 +1141,13 @@ malloc_init_hard_needed(void)
 	}
 #ifdef JEMALLOC_THREADED_INIT
 	if (malloc_initializer != NO_INITIALIZER && !IS_INITIALIZER) {
+		spin_t spinner;
+
 		/* Busy-wait until the initializing thread completes. */
+		spin_init(&spinner);
 		do {
 			malloc_mutex_unlock(TSDN_NULL, &init_lock);
-			CPU_SPINWAIT;
+			spin_adaptive(&spinner);
 			malloc_mutex_lock(TSDN_NULL, &init_lock);
 		} while (!malloc_initialized());
 		return (false);
@@ -1194,8 +1175,6 @@ malloc_init_hard_a0_locked()
 	}
 	pages_boot();
 	if (base_boot())
-		return (true);
-	if (chunk_boot())
 		return (true);
 	if (extent_boot())
 		return (true);
@@ -1334,7 +1313,7 @@ malloc_init_hard(void)
 		return (true);
 	malloc_mutex_lock(tsd_tsdn(tsd), &init_lock);
 
-	if (config_prof && prof_boot2(tsd_tsdn(tsd))) {
+	if (config_prof && prof_boot2(tsd)) {
 		malloc_mutex_unlock(tsd_tsdn(tsd), &init_lock);
 		return (true);
 	}
@@ -2651,7 +2630,6 @@ _malloc_prefork(void)
 		}
 	}
 	base_prefork(tsd_tsdn(tsd));
-	extent_prefork(tsd_tsdn(tsd));
 	for (i = 0; i < narenas; i++) {
 		if ((arena = arena_get(tsd_tsdn(tsd), i, false)) != NULL)
 			arena_prefork3(tsd_tsdn(tsd), arena);
@@ -2680,7 +2658,6 @@ _malloc_postfork(void)
 
 	witness_postfork_parent(tsd);
 	/* Release all mutexes, now that fork() has completed. */
-	extent_postfork_parent(tsd_tsdn(tsd));
 	base_postfork_parent(tsd_tsdn(tsd));
 	for (i = 0, narenas = narenas_total_get(); i < narenas; i++) {
 		arena_t *arena;
@@ -2705,7 +2682,6 @@ jemalloc_postfork_child(void)
 
 	witness_postfork_child(tsd);
 	/* Release all mutexes, now that fork() has completed. */
-	extent_postfork_child(tsd_tsdn(tsd));
 	base_postfork_child(tsd_tsdn(tsd));
 	for (i = 0, narenas = narenas_total_get(); i < narenas; i++) {
 		arena_t *arena;

@@ -7,23 +7,6 @@
 #define	LG_SLAB_MAXREGS		(LG_PAGE - LG_TINY_MIN)
 #define	SLAB_MAXREGS		(1U << LG_SLAB_MAXREGS)
 
-/*
- * The minimum ratio of active:dirty pages per arena is computed as:
- *
- *   (nactive >> lg_dirty_mult) >= ndirty
- *
- * So, supposing that lg_dirty_mult is 3, there can be no less than 8 times as
- * many active pages as dirty pages.
- */
-#define	LG_DIRTY_MULT_DEFAULT	3
-
-typedef enum {
-	purge_mode_ratio = 0,
-	purge_mode_decay = 1,
-
-	purge_mode_limit = 2
-} purge_mode_t;
-#define	PURGE_DEFAULT		purge_mode_ratio
 /* Default decay time in seconds. */
 #define	DECAY_TIME_DEFAULT	10
 /* Number of event ticks between time checks. */
@@ -31,6 +14,7 @@ typedef enum {
 
 typedef struct arena_slab_data_s arena_slab_data_t;
 typedef struct arena_bin_info_s arena_bin_info_t;
+typedef struct arena_decay_s arena_decay_t;
 typedef struct arena_bin_s arena_bin_t;
 typedef struct arena_s arena_t;
 typedef struct arena_tdata_s arena_tdata_t;
@@ -87,6 +71,49 @@ struct arena_bin_info_s {
 	 * bin.
 	 */
 	bitmap_info_t		bitmap_info;
+};
+
+struct arena_decay_s {
+	/*
+	 * Approximate time in seconds from the creation of a set of unused
+	 * dirty pages until an equivalent set of unused dirty pages is purged
+	 * and/or reused.
+	 */
+	ssize_t			time;
+	/* time / SMOOTHSTEP_NSTEPS. */
+	nstime_t		interval;
+	/*
+	 * Time at which the current decay interval logically started.  We do
+	 * not actually advance to a new epoch until sometime after it starts
+	 * because of scheduling and computation delays, and it is even possible
+	 * to completely skip epochs.  In all cases, during epoch advancement we
+	 * merge all relevant activity into the most recently recorded epoch.
+	 */
+	nstime_t		epoch;
+	/* Deadline randomness generator. */
+	uint64_t		jitter_state;
+	/*
+	 * Deadline for current epoch.  This is the sum of interval and per
+	 * epoch jitter which is a uniform random variable in [0..interval).
+	 * Epochs always advance by precise multiples of interval, but we
+	 * randomize the deadline to reduce the likelihood of arenas purging in
+	 * lockstep.
+	 */
+	nstime_t		deadline;
+	/*
+	 * Number of dirty pages at beginning of current epoch.  During epoch
+	 * advancement we use the delta between arena->decay.ndirty and
+	 * arena->ndirty to determine how many dirty pages, if any, were
+	 * generated.
+	 */
+	size_t			ndirty;
+	/*
+	 * Trailing log of how many unused dirty pages were generated during
+	 * each of the past SMOOTHSTEP_NSTEPS decay epochs, where the last
+	 * element is the most recent epoch.  Corresponding epoch times are
+	 * relative to epoch.
+	 */
+	size_t			backlog[SMOOTHSTEP_NSTEPS];
 };
 
 struct arena_bin_s {
@@ -159,9 +186,6 @@ struct arena_s {
 
 	dss_prec_t		dss_prec;
 
-	/* Minimum ratio (log base 2) of nactive:ndirty. */
-	ssize_t			lg_dirty_mult;
-
 	/* True if a thread is currently executing arena_purge_to_limit(). */
 	bool			purging;
 
@@ -176,52 +200,8 @@ struct arena_s {
 	 */
 	size_t			ndirty;
 
-	/*
-	 * Approximate time in seconds from the creation of a set of unused
-	 * dirty pages until an equivalent set of unused dirty pages is purged
-	 * and/or reused.
-	 */
-	ssize_t			decay_time;
-	/* decay_time / SMOOTHSTEP_NSTEPS. */
-	nstime_t		decay_interval;
-	/*
-	 * Time at which the current decay interval logically started.  We do
-	 * not actually advance to a new epoch until sometime after it starts
-	 * because of scheduling and computation delays, and it is even possible
-	 * to completely skip epochs.  In all cases, during epoch advancement we
-	 * merge all relevant activity into the most recently recorded epoch.
-	 */
-	nstime_t		decay_epoch;
-	/* decay_deadline randomness generator. */
-	uint64_t		decay_jitter_state;
-	/*
-	 * Deadline for current epoch.  This is the sum of decay_interval and
-	 * per epoch jitter which is a uniform random variable in
-	 * [0..decay_interval).  Epochs always advance by precise multiples of
-	 * decay_interval, but we randomize the deadline to reduce the
-	 * likelihood of arenas purging in lockstep.
-	 */
-	nstime_t		decay_deadline;
-	/*
-	 * Number of dirty pages at beginning of current epoch.  During epoch
-	 * advancement we use the delta between decay_ndirty and ndirty to
-	 * determine how many dirty pages, if any, were generated, and record
-	 * the result in decay_backlog.
-	 */
-	size_t			decay_ndirty;
-	/*
-	 * Memoized result of arena_decay_backlog_npages_limit() corresponding
-	 * to the current contents of decay_backlog, i.e. the limit on how many
-	 * pages are allowed to exist for the decay epochs.
-	 */
-	size_t			decay_backlog_npages_limit;
-	/*
-	 * Trailing log of how many unused dirty pages were generated during
-	 * each of the past SMOOTHSTEP_NSTEPS decay epochs, where the last
-	 * element is the most recent epoch.  Corresponding epoch times are
-	 * relative to decay_epoch.
-	 */
-	size_t			decay_backlog[SMOOTHSTEP_NSTEPS];
+	/* Decay-based purging state. */
+	arena_decay_t		decay;
 
 	/* Extant large allocations. */
 	ql_head(extent_t)	large;
@@ -274,9 +254,6 @@ static const size_t	large_pad =
 #endif
     ;
 
-extern purge_mode_t	opt_purge;
-extern const char	*purge_mode_names[];
-extern ssize_t		opt_lg_dirty_mult;
 extern ssize_t		opt_decay_time;
 
 extern const arena_bin_info_t	arena_bin_info[NBINS];
@@ -298,9 +275,6 @@ void	arena_extent_ralloc_large_shrink(tsdn_t *tsdn, arena_t *arena,
     extent_t *extent, size_t oldsize);
 void	arena_extent_ralloc_large_expand(tsdn_t *tsdn, arena_t *arena,
     extent_t *extent, size_t oldsize);
-ssize_t	arena_lg_dirty_mult_get(tsdn_t *tsdn, arena_t *arena);
-bool	arena_lg_dirty_mult_set(tsdn_t *tsdn, arena_t *arena,
-    ssize_t lg_dirty_mult);
 ssize_t	arena_decay_time_get(tsdn_t *tsdn, arena_t *arena);
 bool	arena_decay_time_set(tsdn_t *tsdn, arena_t *arena, ssize_t decay_time);
 void	arena_purge(tsdn_t *tsdn, arena_t *arena, bool all);
@@ -334,17 +308,15 @@ void	*arena_ralloc(tsdn_t *tsdn, arena_t *arena, extent_t *extent, void *ptr,
     size_t oldsize, size_t size, size_t alignment, bool zero, tcache_t *tcache);
 dss_prec_t	arena_dss_prec_get(tsdn_t *tsdn, arena_t *arena);
 bool	arena_dss_prec_set(tsdn_t *tsdn, arena_t *arena, dss_prec_t dss_prec);
-ssize_t	arena_lg_dirty_mult_default_get(void);
-bool	arena_lg_dirty_mult_default_set(ssize_t lg_dirty_mult);
 ssize_t	arena_decay_time_default_get(void);
 bool	arena_decay_time_default_set(ssize_t decay_time);
 void	arena_basic_stats_merge(tsdn_t *tsdn, arena_t *arena,
-    unsigned *nthreads, const char **dss, ssize_t *lg_dirty_mult,
-    ssize_t *decay_time, size_t *nactive, size_t *ndirty);
+    unsigned *nthreads, const char **dss, ssize_t *decay_time, size_t *nactive,
+    size_t *ndirty);
 void	arena_stats_merge(tsdn_t *tsdn, arena_t *arena, unsigned *nthreads,
-    const char **dss, ssize_t *lg_dirty_mult, ssize_t *decay_time,
-    size_t *nactive, size_t *ndirty, arena_stats_t *astats,
-    malloc_bin_stats_t *bstats, malloc_large_stats_t *lstats);
+    const char **dss, ssize_t *decay_time, size_t *nactive, size_t *ndirty,
+    arena_stats_t *astats, malloc_bin_stats_t *bstats,
+    malloc_large_stats_t *lstats);
 unsigned	arena_nthreads_get(arena_t *arena, bool internal);
 void	arena_nthreads_inc(arena_t *arena, bool internal);
 void	arena_nthreads_dec(arena_t *arena, bool internal);

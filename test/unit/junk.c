@@ -53,10 +53,10 @@ large_dalloc_junk_intercept(void *ptr, size_t usize)
 }
 
 static void
-large_dalloc_maybe_junk_intercept(tsdn_t *tsdn, void *ptr, size_t usize)
+large_dalloc_maybe_junk_intercept(void *ptr, size_t usize)
 {
 
-	large_dalloc_maybe_junk_orig(tsdn, ptr, usize);
+	large_dalloc_maybe_junk_orig(ptr, usize);
 	if (ptr == watch_for_junking)
 		saw_junking = true;
 }
@@ -140,7 +140,7 @@ TEST_BEGIN(test_junk_large)
 {
 
 	test_skip_if(!config_fill);
-	test_junk(SMALL_MAXCLASS+1, chunksize*2);
+	test_junk(SMALL_MAXCLASS+1, (1U << (LG_LARGE_MINCLASS+1)));
 }
 TEST_END
 

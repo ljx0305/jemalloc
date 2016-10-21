@@ -30,8 +30,6 @@
 
 bool	opt_stats_print = false;
 
-size_t	stats_cactive = 0;
-
 /******************************************************************************/
 /* Function prototypes for non-inline static functions. */
 
@@ -210,7 +208,7 @@ stats_arena_print(void (*write_cb)(void *, const char *), void *cbopaque,
 {
 	unsigned nthreads;
 	const char *dss;
-	ssize_t lg_dirty_mult, decay_time;
+	ssize_t decay_time;
 	size_t page, pactive, pdirty, mapped, retained, metadata;
 	uint64_t npurge, nmadvise, purged;
 	size_t small_allocated;
@@ -226,25 +224,12 @@ stats_arena_print(void (*write_cb)(void *, const char *), void *cbopaque,
 	CTL_M2_GET("stats.arenas.0.dss", i, &dss, const char *);
 	malloc_cprintf(write_cb, cbopaque, "dss allocation precedence: %s\n",
 	    dss);
-	CTL_M2_GET("stats.arenas.0.lg_dirty_mult", i, &lg_dirty_mult, ssize_t);
-	if (opt_purge == purge_mode_ratio) {
-		if (lg_dirty_mult >= 0) {
-			malloc_cprintf(write_cb, cbopaque,
-			    "min active:dirty page ratio: %u:1\n",
-			    (1U << lg_dirty_mult));
-		} else {
-			malloc_cprintf(write_cb, cbopaque,
-			    "min active:dirty page ratio: N/A\n");
-		}
-	}
 	CTL_M2_GET("stats.arenas.0.decay_time", i, &decay_time, ssize_t);
-	if (opt_purge == purge_mode_decay) {
-		if (decay_time >= 0) {
-			malloc_cprintf(write_cb, cbopaque, "decay time: %zd\n",
-			    decay_time);
-		} else
-			malloc_cprintf(write_cb, cbopaque, "decay time: N/A\n");
-	}
+	if (decay_time >= 0) {
+		malloc_cprintf(write_cb, cbopaque, "decay time: %zd\n",
+		    decay_time);
+	} else
+		malloc_cprintf(write_cb, cbopaque, "decay time: N/A\n");
 	CTL_M2_GET("stats.arenas.0.pactive", i, &pactive, size_t);
 	CTL_M2_GET("stats.arenas.0.pdirty", i, &pdirty, size_t);
 	CTL_M2_GET("stats.arenas.0.npurge", i, &npurge, uint64_t);
@@ -429,16 +414,10 @@ stats_print(void (*write_cb)(void *, const char *), void *cbopaque,
 		malloc_cprintf(write_cb, cbopaque,
 		    "Run-time option settings:\n");
 		OPT_WRITE_BOOL(abort)
-		OPT_WRITE_SIZE_T(lg_chunk)
 		OPT_WRITE_CHAR_P(dss)
 		OPT_WRITE_UNSIGNED(narenas)
 		OPT_WRITE_CHAR_P(purge)
-		if (opt_purge == purge_mode_ratio) {
-			OPT_WRITE_SSIZE_T_MUTABLE(lg_dirty_mult,
-			    arenas.lg_dirty_mult)
-		}
-		if (opt_purge == purge_mode_decay)
-			OPT_WRITE_SSIZE_T_MUTABLE(decay_time, arenas.decay_time)
+		OPT_WRITE_SSIZE_T_MUTABLE(decay_time, arenas.decay_time)
 		OPT_WRITE_BOOL(stats_print)
 		OPT_WRITE_CHAR_P(junk)
 		OPT_WRITE_BOOL(zero)
@@ -479,24 +458,10 @@ stats_print(void (*write_cb)(void *, const char *), void *cbopaque,
 		CTL_GET("arenas.page", &sv, size_t);
 		malloc_cprintf(write_cb, cbopaque, "Page size: %zu\n", sv);
 
-		CTL_GET("arenas.lg_dirty_mult", &ssv, ssize_t);
-		if (opt_purge == purge_mode_ratio) {
-			if (ssv >= 0) {
-				malloc_cprintf(write_cb, cbopaque,
-				    "Min active:dirty page ratio per arena: "
-				    "%u:1\n", (1U << ssv));
-			} else {
-				malloc_cprintf(write_cb, cbopaque,
-				    "Min active:dirty page ratio per arena: "
-				    "N/A\n");
-			}
-		}
 		CTL_GET("arenas.decay_time", &ssv, ssize_t);
-		if (opt_purge == purge_mode_decay) {
-			malloc_cprintf(write_cb, cbopaque,
-			    "Unused dirty page decay time: %zd%s\n",
-			    ssv, (ssv < 0) ? " (no decay)" : "");
-		}
+		malloc_cprintf(write_cb, cbopaque,
+		    "Unused dirty page decay time: %zd%s\n", ssv, (ssv < 0) ?
+		    " (no decay)" : "");
 		if (je_mallctl("arenas.tcache_max", &sv, &ssz, NULL, 0) == 0) {
 			malloc_cprintf(write_cb, cbopaque,
 			    "Maximum thread-cached size class: %zu\n", sv);
@@ -518,16 +483,11 @@ stats_print(void (*write_cb)(void *, const char *), void *cbopaque,
 				    "Average profile dump interval: N/A\n");
 			}
 		}
-		CTL_GET("opt.lg_chunk", &sv, size_t);
-		malloc_cprintf(write_cb, cbopaque,
-		    "Chunk size: %zu (2^%zu)\n", (ZU(1) << sv), sv);
 	}
 
 	if (config_stats) {
-		size_t *cactive;
 		size_t allocated, active, metadata, resident, mapped, retained;
 
-		CTL_GET("stats.cactive", &cactive, size_t *);
 		CTL_GET("stats.allocated", &allocated, size_t);
 		CTL_GET("stats.active", &active, size_t);
 		CTL_GET("stats.metadata", &metadata, size_t);
@@ -538,9 +498,6 @@ stats_print(void (*write_cb)(void *, const char *), void *cbopaque,
 		    "Allocated: %zu, active: %zu, metadata: %zu,"
 		    " resident: %zu, mapped: %zu, retained: %zu\n",
 		    allocated, active, metadata, resident, mapped, retained);
-		malloc_cprintf(write_cb, cbopaque,
-		    "Current active ceiling: %zu\n",
-		    atomic_read_z(cactive));
 
 		if (merged) {
 			unsigned narenas;
