@@ -383,7 +383,6 @@ psz2ind
 psz2ind_clamp
 psz2ind_impl
 psz2u
-register_zone
 rtree_child_read
 rtree_child_read_hard
 rtree_child_tryread
@@ -420,6 +419,8 @@ size2index
 size2index_compute
 size2index_lookup
 size2index_tab
+spin_adaptive
+spin_init
 stats_print
 tcache_alloc_easy
 tcache_alloc_large
@@ -530,9 +531,11 @@ witness_lock
 witness_lock_error
 witness_lockless_error
 witness_not_owner_error
+witness_owner
 witness_owner_error
 witness_postfork_child
 witness_postfork_parent
 witness_prefork
 witness_unlock
 witnesses_cleanup
+zone_register

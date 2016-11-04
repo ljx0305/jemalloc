@@ -28,7 +28,8 @@ typedef int witness_comp_t (const witness_t *, void *, const witness_t *,
 #define	WITNESS_RANK_ARENA_EXTENT_CACHE	10
 
 #define	WITNESS_RANK_RTREE_ELM		11U
-#define	WITNESS_RANK_BASE		12U
+#define	WITNESS_RANK_RTREE		12U
+#define	WITNESS_RANK_BASE		13U
 
 #define	WITNESS_RANK_LEAF		0xffffffffU
 #define	WITNESS_RANK_ARENA_BIN		WITNESS_RANK_LEAF
@@ -112,6 +113,7 @@ void	witness_postfork_child(tsd_t *tsd);
 #ifdef JEMALLOC_H_INLINES
 
 #ifndef JEMALLOC_ENABLE_INLINE
+bool	witness_owner(tsd_t *tsd, const witness_t *witness);
 void	witness_assert_owner(tsdn_t *tsdn, const witness_t *witness);
 void	witness_assert_not_owner(tsdn_t *tsdn, const witness_t *witness);
 void	witness_assert_lockless(tsdn_t *tsdn);
@@ -120,12 +122,28 @@ void	witness_unlock(tsdn_t *tsdn, witness_t *witness);
 #endif
 
 #if (defined(JEMALLOC_ENABLE_INLINE) || defined(JEMALLOC_MUTEX_C_))
+/* Helper, not intended for direct use. */
+JEMALLOC_INLINE bool
+witness_owner(tsd_t *tsd, const witness_t *witness)
+{
+	witness_list_t *witnesses;
+	witness_t *w;
+
+	cassert(config_debug);
+
+	witnesses = tsd_witnessesp_get(tsd);
+	ql_foreach(w, witnesses, link) {
+		if (w == witness)
+			return (true);
+	}
+
+	return (false);
+}
+
 JEMALLOC_INLINE void
 witness_assert_owner(tsdn_t *tsdn, const witness_t *witness)
 {
 	tsd_t *tsd;
-	witness_list_t *witnesses;
-	witness_t *w;
 
 	if (!config_debug)
 		return;
@@ -136,11 +154,8 @@ witness_assert_owner(tsdn_t *tsdn, const witness_t *witness)
 	if (witness->rank == WITNESS_RANK_OMIT)
 		return;
 
-	witnesses = tsd_witnessesp_get(tsd);
-	ql_foreach(w, witnesses, link) {
-		if (w == witness)
-			return;
-	}
+	if (witness_owner(tsd, witness))
+		return;
 	witness_owner_error(witness);
 }
 
@@ -243,10 +258,16 @@ witness_unlock(tsdn_t *tsdn, witness_t *witness)
 	if (witness->rank == WITNESS_RANK_OMIT)
 		return;
 
-	witness_assert_owner(tsdn, witness);
-
-	witnesses = tsd_witnessesp_get(tsd);
-	ql_remove(witnesses, witness, link);
+	/*
+	 * Check whether owner before removal, rather than relying on
+	 * witness_assert_owner() to abort, so that unit tests can test this
+	 * function's failure mode without causing undefined behavior.
+	 */
+	if (witness_owner(tsd, witness)) {
+		witnesses = tsd_witnessesp_get(tsd);
+		ql_remove(witnesses, witness, link);
+	} else
+		witness_assert_owner(tsdn, witness);
 }
 #endif
 
