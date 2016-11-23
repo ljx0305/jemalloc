@@ -41,8 +41,12 @@
 #define	MALLOC_PRINTF_BUFSIZE	4096
 
 /* Junk fill patterns. */
-#define	JEMALLOC_ALLOC_JUNK	((uint8_t)0xa5)
-#define	JEMALLOC_FREE_JUNK	((uint8_t)0x5a)
+#ifndef JEMALLOC_ALLOC_JUNK
+#  define JEMALLOC_ALLOC_JUNK	((uint8_t)0xa5)
+#endif
+#ifndef JEMALLOC_FREE_JUNK
+#  define JEMALLOC_FREE_JUNK	((uint8_t)0x5a)
+#endif
 
 /*
  * Wrap a cpp argument that contains commas such that it isn't broken up into
@@ -56,17 +60,17 @@
  * uninitialized.
  */
 #ifdef JEMALLOC_CC_SILENCE
-#	define JEMALLOC_CC_SILENCE_INIT(v) = v
+#  define JEMALLOC_CC_SILENCE_INIT(v) = v
 #else
-#	define JEMALLOC_CC_SILENCE_INIT(v)
+#  define JEMALLOC_CC_SILENCE_INIT(v)
 #endif
 
 #ifdef __GNUC__
-#	define likely(x)   __builtin_expect(!!(x), 1)
-#	define unlikely(x) __builtin_expect(!!(x), 0)
+#  define likely(x)   __builtin_expect(!!(x), 1)
+#  define unlikely(x) __builtin_expect(!!(x), 0)
 #else
-#	define likely(x)   !!(x)
-#	define unlikely(x) !!(x)
+#  define likely(x)   !!(x)
+#  define unlikely(x) !!(x)
 #endif
 
 #if !defined(JEMALLOC_INTERNAL_UNREACHABLE)

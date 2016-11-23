@@ -49,11 +49,12 @@ arena_extent_cache_alloc_locked(tsdn_t *tsdn, arena_t *arena,
     extent_hooks_t **r_extent_hooks, void *new_addr, size_t usize, size_t pad,
     size_t alignment, bool *zero, bool slab)
 {
+	bool commit = true;
 
 	malloc_mutex_assert_owner(tsdn, &arena->lock);
 
 	return (extent_alloc_cache(tsdn, arena, r_extent_hooks, new_addr, usize,
-	    pad, alignment, zero, slab));
+	    pad, alignment, zero, &commit, slab));
 }
 
 extent_t *
@@ -130,8 +131,7 @@ arena_slab_reg_alloc(tsdn_t *tsdn, extent_t *slab,
 	assert(slab_data->nfree > 0);
 	assert(!bitmap_full(slab_data->bitmap, &bin_info->bitmap_info));
 
-	regind = (unsigned)bitmap_sfu(slab_data->bitmap,
-	    &bin_info->bitmap_info);
+	regind = bitmap_sfu(slab_data->bitmap, &bin_info->bitmap_info);
 	ret = (void *)((uintptr_t)extent_addr_get(slab) +
 	    (uintptr_t)(bin_info->reg_size * regind));
 	slab_data->nfree--;
@@ -421,8 +421,8 @@ arena_decay_deadline_init(arena_t *arena)
 	if (arena->decay.time > 0) {
 		nstime_t jitter;
 
-		nstime_init(&jitter, prng_range(&arena->decay.jitter_state,
-		    nstime_ns(&arena->decay.interval), false));
+		nstime_init(&jitter, prng_range_u64(&arena->decay.jitter_state,
+		    nstime_ns(&arena->decay.interval)));
 		nstime_add(&arena->decay.deadline, &jitter);
 	}
 }
@@ -681,7 +681,7 @@ arena_stash_dirty(tsdn_t *tsdn, arena_t *arena, extent_hooks_t **r_extent_hooks,
 	for (extent = qr_next(&arena->extents_dirty, qr_link); extent !=
 	    &arena->extents_dirty; extent = next) {
 		size_t npages;
-		bool zero;
+		bool zero, commit;
 		UNUSED extent_t *textent;
 
 		npages = extent_size_get(extent) >> LG_PAGE;
@@ -691,9 +691,10 @@ arena_stash_dirty(tsdn_t *tsdn, arena_t *arena, extent_hooks_t **r_extent_hooks,
 		next = qr_next(extent, qr_link);
 		/* Allocate. */
 		zero = false;
+		commit = false;
 		textent = extent_alloc_cache_locked(tsdn, arena, r_extent_hooks,
 		    extent_base_get(extent), extent_size_get(extent), 0, PAGE,
-		    &zero, false);
+		    &zero, &commit, false);
 		assert(textent == extent);
 		assert(zero == extent_zeroed_get(extent));
 		extent_ring_remove(extent);
@@ -758,7 +759,7 @@ arena_purge_to_limit(tsdn_t *tsdn, arena_t *arena, size_t ndirty_limit)
 		size_t ndirty = arena_dirty_count(tsdn, arena);
 		assert(ndirty == arena->ndirty);
 	}
-	extent_init(&purge_extents_sentinel, arena, NULL, 0, 0, false, false,
+	extent_init(&purge_extents_sentinel, arena, NULL, 0, 0, 0, false, false,
 	    false, false);
 
 	npurge = arena_stash_dirty(tsdn, arena, &extent_hooks, ndirty_limit,
@@ -795,6 +796,47 @@ arena_slab_dalloc(tsdn_t *tsdn, arena_t *arena, extent_t *slab)
 
 	arena_nactive_sub(arena, extent_size_get(slab) >> LG_PAGE);
 	arena_extent_cache_dalloc_locked(tsdn, arena, &extent_hooks, slab);
+}
+
+static void
+arena_bin_slabs_nonfull_insert(arena_bin_t *bin, extent_t *slab)
+{
+
+	assert(extent_slab_data_get(slab)->nfree > 0);
+	extent_heap_insert(&bin->slabs_nonfull, slab);
+}
+
+static void
+arena_bin_slabs_nonfull_remove(arena_bin_t *bin, extent_t *slab)
+{
+
+	extent_heap_remove(&bin->slabs_nonfull, slab);
+}
+
+static extent_t *
+arena_bin_slabs_nonfull_tryget(arena_bin_t *bin)
+{
+	extent_t *slab = extent_heap_remove_first(&bin->slabs_nonfull);
+	if (slab == NULL)
+		return (NULL);
+	if (config_stats)
+		bin->stats.reslabs++;
+	return (slab);
+}
+
+static void
+arena_bin_slabs_full_insert(arena_bin_t *bin, extent_t *slab)
+{
+
+	assert(extent_slab_data_get(slab)->nfree == 0);
+	extent_ring_insert(&bin->slabs_full, slab);
+}
+
+static void
+arena_bin_slabs_full_remove(extent_t *slab)
+{
+
+	extent_ring_remove(slab);
 }
 
 void
@@ -861,6 +903,7 @@ arena_reset(tsd_t *tsd, arena_t *arena)
 		for (slab = qr_next(&bin->slabs_full, qr_link); slab !=
 		    &bin->slabs_full; slab = qr_next(&bin->slabs_full,
 		    qr_link)) {
+			arena_bin_slabs_full_remove(slab);
 			malloc_mutex_unlock(tsd_tsdn(tsd), &bin->lock);
 			arena_slab_dalloc(tsd_tsdn(tsd), arena, slab);
 			malloc_mutex_lock(tsd_tsdn(tsd), &bin->lock);
@@ -876,47 +919,6 @@ arena_reset(tsd_t *tsd, arena_t *arena)
 	arena->nactive = 0;
 
 	malloc_mutex_unlock(tsd_tsdn(tsd), &arena->lock);
-}
-
-static void
-arena_bin_slabs_nonfull_insert(arena_bin_t *bin, extent_t *slab)
-{
-
-	assert(extent_slab_data_get(slab)->nfree > 0);
-	extent_heap_insert(&bin->slabs_nonfull, slab);
-}
-
-static void
-arena_bin_slabs_nonfull_remove(arena_bin_t *bin, extent_t *slab)
-{
-
-	extent_heap_remove(&bin->slabs_nonfull, slab);
-}
-
-static extent_t *
-arena_bin_slabs_nonfull_tryget(arena_bin_t *bin)
-{
-	extent_t *slab = extent_heap_remove_first(&bin->slabs_nonfull);
-	if (slab == NULL)
-		return (NULL);
-	if (config_stats)
-		bin->stats.reslabs++;
-	return (slab);
-}
-
-static void
-arena_bin_slabs_full_insert(arena_bin_t *bin, extent_t *slab)
-{
-
-	assert(extent_slab_data_get(slab)->nfree == 0);
-	extent_ring_insert(&bin->slabs_full, slab);
-}
-
-static void
-arena_bin_slabs_full_remove(extent_t *slab)
-{
-
-	extent_ring_remove(slab);
 }
 
 static extent_t *
@@ -943,9 +945,8 @@ arena_slab_alloc(tsdn_t *tsdn, arena_t *arena, szind_t binind,
 	extent_t *slab;
 	arena_slab_data_t *slab_data;
 	extent_hooks_t *extent_hooks = EXTENT_HOOKS_INITIALIZER;
-	bool zero;
+	bool zero = false;
 
-	zero = false;
 	slab = arena_extent_cache_alloc_locked(tsdn, arena, &extent_hooks, NULL,
 	    bin_info->slab_size, 0, PAGE, &zero, true);
 	if (slab == NULL) {
@@ -1349,12 +1350,12 @@ arena_bin_lower_slab(tsdn_t *tsdn, arena_t *arena, extent_t *slab,
 	assert(extent_slab_data_get(slab)->nfree > 0);
 
 	/*
-	 * Make sure that if bin->slabcur is non-NULL, it refers to the lowest
-	 * non-full slab.  It is okay to NULL slabcur out rather than
-	 * proactively keeping it pointing at the lowest non-full slab.
+	 * Make sure that if bin->slabcur is non-NULL, it refers to the
+	 * oldest/lowest non-full slab.  It is okay to NULL slabcur out rather
+	 * than proactively keeping it pointing at the oldest/lowest non-full
+	 * slab.
 	 */
-	if (bin->slabcur != NULL && (uintptr_t)extent_addr_get(slab) <
-	    (uintptr_t)extent_addr_get(bin->slabcur)) {
+	if (bin->slabcur != NULL && extent_snad_comp(bin->slabcur, slab) > 0) {
 		/* Switch slabcur. */
 		if (extent_slab_data_get(bin->slabcur)->nfree > 0)
 			arena_bin_slabs_nonfull_insert(bin, bin->slabcur);
@@ -1540,7 +1541,7 @@ ssize_t
 arena_decay_time_default_get(void)
 {
 
-	return ((ssize_t)atomic_read_z((size_t *)&decay_time_default));
+	return ((ssize_t)atomic_read_zu((size_t *)&decay_time_default));
 }
 
 bool
@@ -1549,7 +1550,7 @@ arena_decay_time_default_set(ssize_t decay_time)
 
 	if (!arena_decay_time_valid(decay_time))
 		return (true);
-	atomic_write_z((size_t *)&decay_time_default, (size_t)decay_time);
+	atomic_write_zu((size_t *)&decay_time_default, (size_t)decay_time);
 	return (false);
 }
 
@@ -1649,6 +1650,13 @@ arena_nthreads_dec(arena_t *arena, bool internal)
 	atomic_sub_u(&arena->nthreads[internal], 1);
 }
 
+size_t
+arena_extent_sn_next(arena_t *arena)
+{
+
+	return (atomic_add_zu(&arena->extent_sn_next, 1) - 1);
+}
+
 arena_t *
 arena_new(tsdn_t *tsdn, unsigned ind)
 {
@@ -1679,8 +1687,10 @@ arena_new(tsdn_t *tsdn, unsigned ind)
 		 * deterministic seed.
 		 */
 		arena->offset_state = config_debug ? ind :
-		    (uint64_t)(uintptr_t)arena;
+		    (size_t)(uintptr_t)arena;
 	}
+
+	arena->extent_sn_next = 0;
 
 	arena->dss_prec = extent_dss_prec_get();
 
@@ -1695,12 +1705,12 @@ arena_new(tsdn_t *tsdn, unsigned ind)
 	    WITNESS_RANK_ARENA_LARGE))
 		return (NULL);
 
-	for (i = 0; i < NPSIZES; i++) {
+	for (i = 0; i < NPSIZES+1; i++) {
 		extent_heap_new(&arena->extents_cached[i]);
 		extent_heap_new(&arena->extents_retained[i]);
 	}
 
-	extent_init(&arena->extents_dirty, arena, NULL, 0, 0, false, false,
+	extent_init(&arena->extents_dirty, arena, NULL, 0, 0, 0, false, false,
 	    false, false);
 
 	if (malloc_mutex_init(&arena->extents_mtx, "arena_extents",
@@ -1722,8 +1732,8 @@ arena_new(tsdn_t *tsdn, unsigned ind)
 			return (NULL);
 		bin->slabcur = NULL;
 		extent_heap_new(&bin->slabs_nonfull);
-		extent_init(&bin->slabs_full, arena, NULL, 0, 0, false, false,
-		    false, false);
+		extent_init(&bin->slabs_full, arena, NULL, 0, 0, 0, false,
+		    false, false, false);
 		if (config_stats)
 			memset(&bin->stats, 0, sizeof(malloc_bin_stats_t));
 	}
