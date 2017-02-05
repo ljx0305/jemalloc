@@ -1,4 +1,4 @@
-#define	JEMALLOC_TSD_C_
+#define JEMALLOC_TSD_C_
 #include "jemalloc/internal/jemalloc_internal.h"
 
 /******************************************************************************/
@@ -12,23 +12,17 @@ malloc_tsd_data(, , tsd_t, TSD_INITIALIZER)
 /******************************************************************************/
 
 void *
-malloc_tsd_malloc(size_t size)
-{
-
-	return (a0malloc(CACHELINE_CEILING(size)));
+malloc_tsd_malloc(size_t size) {
+	return a0malloc(CACHELINE_CEILING(size));
 }
 
 void
-malloc_tsd_dalloc(void *wrapper)
-{
-
+malloc_tsd_dalloc(void *wrapper) {
 	a0dalloc(wrapper);
 }
 
 void
-malloc_tsd_no_cleanup(void *arg)
-{
-
+malloc_tsd_no_cleanup(void *arg) {
 	not_reached();
 }
 
@@ -37,21 +31,22 @@ malloc_tsd_no_cleanup(void *arg)
 JEMALLOC_EXPORT
 #endif
 void
-_malloc_thread_cleanup(void)
-{
+_malloc_thread_cleanup(void) {
 	bool pending[MALLOC_TSD_CLEANUPS_MAX], again;
 	unsigned i;
 
-	for (i = 0; i < ncleanups; i++)
+	for (i = 0; i < ncleanups; i++) {
 		pending[i] = true;
+	}
 
 	do {
 		again = false;
 		for (i = 0; i < ncleanups; i++) {
 			if (pending[i]) {
 				pending[i] = cleanups[i]();
-				if (pending[i])
+				if (pending[i]) {
 					again = true;
+				}
 			}
 		}
 	} while (again);
@@ -59,17 +54,14 @@ _malloc_thread_cleanup(void)
 #endif
 
 void
-malloc_tsd_cleanup_register(bool (*f)(void))
-{
-
+malloc_tsd_cleanup_register(bool (*f)(void)) {
 	assert(ncleanups < MALLOC_TSD_CLEANUPS_MAX);
 	cleanups[ncleanups] = f;
 	ncleanups++;
 }
 
 void
-tsd_cleanup(void *arg)
-{
+tsd_cleanup(void *arg) {
 	tsd_t *tsd = (tsd_t *)arg;
 
 	switch (tsd->state) {
@@ -77,10 +69,10 @@ tsd_cleanup(void *arg)
 		/* Do nothing. */
 		break;
 	case tsd_state_nominal:
-#define	MALLOC_TSD_cleanup_yes(n, t)					\
+#define MALLOC_TSD_cleanup_yes(n, t)					\
 		n##_cleanup(tsd);
-#define	MALLOC_TSD_cleanup_no(n, t)
-#define	O(n, t, c)							\
+#define MALLOC_TSD_cleanup_no(n, t)
+#define O(n, t, c)							\
 		MALLOC_TSD_cleanup_##c(n, t)
 MALLOC_TSD
 #undef MALLOC_TSD_cleanup_yes
@@ -112,31 +104,27 @@ MALLOC_TSD
 }
 
 tsd_t *
-malloc_tsd_boot0(void)
-{
+malloc_tsd_boot0(void) {
 	tsd_t *tsd;
 
 	ncleanups = 0;
-	if (tsd_boot0())
-		return (NULL);
+	if (tsd_boot0()) {
+		return NULL;
+	}
 	tsd = tsd_fetch();
 	*tsd_arenas_tdata_bypassp_get(tsd) = true;
-	return (tsd);
+	return tsd;
 }
 
 void
-malloc_tsd_boot1(void)
-{
-
+malloc_tsd_boot1(void) {
 	tsd_boot1();
 	*tsd_arenas_tdata_bypassp_get(tsd_fetch()) = false;
 }
 
 #ifdef _WIN32
 static BOOL WINAPI
-_tls_callback(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
-{
-
+_tls_callback(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 	switch (fdwReason) {
 #ifdef JEMALLOC_LAZY_LOCK
 	case DLL_THREAD_ATTACH:
@@ -149,7 +137,7 @@ _tls_callback(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 	default:
 		break;
 	}
-	return (true);
+	return true;
 }
 
 #ifdef _MSC_VER
@@ -170,8 +158,7 @@ BOOL	(WINAPI *const tls_callback)(HINSTANCE hinstDLL,
 #if (!defined(JEMALLOC_MALLOC_THREAD_CLEANUP) && !defined(JEMALLOC_TLS) && \
     !defined(_WIN32))
 void *
-tsd_init_check_recursion(tsd_init_head_t *head, tsd_init_block_t *block)
-{
+tsd_init_check_recursion(tsd_init_head_t *head, tsd_init_block_t *block) {
 	pthread_t self = pthread_self();
 	tsd_init_block_t *iter;
 
@@ -180,7 +167,7 @@ tsd_init_check_recursion(tsd_init_head_t *head, tsd_init_block_t *block)
 	ql_foreach(iter, &head->blocks, link) {
 		if (iter->thread == self) {
 			malloc_mutex_unlock(TSDN_NULL, &head->lock);
-			return (iter->data);
+			return iter->data;
 		}
 	}
 	/* Insert block into list. */
@@ -188,13 +175,11 @@ tsd_init_check_recursion(tsd_init_head_t *head, tsd_init_block_t *block)
 	block->thread = self;
 	ql_tail_insert(&head->blocks, block, link);
 	malloc_mutex_unlock(TSDN_NULL, &head->lock);
-	return (NULL);
+	return NULL;
 }
 
 void
-tsd_init_finish(tsd_init_head_t *head, tsd_init_block_t *block)
-{
-
+tsd_init_finish(tsd_init_head_t *head, tsd_init_block_t *block) {
 	malloc_mutex_lock(TSDN_NULL, &head->lock);
 	ql_remove(&head->blocks, block, link);
 	malloc_mutex_unlock(TSDN_NULL, &head->lock);

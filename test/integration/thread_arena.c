@@ -1,10 +1,9 @@
 #include "test/jemalloc_test.h"
 
-#define	NTHREADS 10
+#define NTHREADS 10
 
 void *
-thd_start(void *arg)
-{
+thd_start(void *arg) {
 	unsigned main_arena_ind = *(unsigned *)arg;
 	void *p;
 	unsigned arena_ind;
@@ -35,11 +34,10 @@ thd_start(void *arg)
 	assert_u_eq(arena_ind, main_arena_ind,
 	    "Arena index should be same as for main thread");
 
-	return (NULL);
+	return NULL;
 }
 
-TEST_BEGIN(test_thread_arena)
-{
+TEST_BEGIN(test_thread_arena) {
 	void *p;
 	unsigned arena_ind;
 	size_t size;
@@ -73,9 +71,7 @@ TEST_BEGIN(test_thread_arena)
 TEST_END
 
 int
-main(void)
-{
-
-	return (test(
-	    test_thread_arena));
+main(void) {
+	return test(
+	    test_thread_arena);
 }

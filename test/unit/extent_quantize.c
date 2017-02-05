@@ -1,7 +1,6 @@
 #include "test/jemalloc_test.h"
 
-TEST_BEGIN(test_small_extent_size)
-{
+TEST_BEGIN(test_small_extent_size) {
 	unsigned nbins, i;
 	size_t sz, extent_size;
 	size_t mib[4];
@@ -35,8 +34,7 @@ TEST_BEGIN(test_small_extent_size)
 }
 TEST_END
 
-TEST_BEGIN(test_large_extent_size)
-{
+TEST_BEGIN(test_large_extent_size) {
 	bool cache_oblivious;
 	unsigned nlextents, i;
 	size_t sz, extent_size_prev, ceil_prev;
@@ -100,9 +98,8 @@ TEST_BEGIN(test_large_extent_size)
 }
 TEST_END
 
-TEST_BEGIN(test_monotonic)
-{
-#define	SZ_MAX	ZU(4 * 1024 * 1024)
+TEST_BEGIN(test_monotonic) {
+#define SZ_MAX	ZU(4 * 1024 * 1024)
 	unsigned i;
 	size_t floor_prev, ceil_prev;
 
@@ -136,11 +133,9 @@ TEST_BEGIN(test_monotonic)
 TEST_END
 
 int
-main(void)
-{
-
-	return (test(
+main(void) {
+	return test(
 	    test_small_extent_size,
 	    test_large_extent_size,
-	    test_monotonic));
+	    test_monotonic);
 }

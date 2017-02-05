@@ -10,21 +10,19 @@ const char *malloc_conf = "junk:false";
  * xallocx() would ordinarily be able to extend.
  */
 static unsigned
-arena_ind(void)
-{
+arena_ind(void) {
 	static unsigned ind = 0;
 
 	if (ind == 0) {
 		size_t sz = sizeof(ind);
-		assert_d_eq(mallctl("arenas.extend", (void *)&ind, &sz, NULL,
+		assert_d_eq(mallctl("arenas.create", (void *)&ind, &sz, NULL,
 		    0), 0, "Unexpected mallctl failure creating arena");
 	}
 
-	return (ind);
+	return ind;
 }
 
-TEST_BEGIN(test_same_size)
-{
+TEST_BEGIN(test_same_size) {
 	void *p;
 	size_t sz, tsz;
 
@@ -39,8 +37,7 @@ TEST_BEGIN(test_same_size)
 }
 TEST_END
 
-TEST_BEGIN(test_extra_no_move)
-{
+TEST_BEGIN(test_extra_no_move) {
 	void *p;
 	size_t sz, tsz;
 
@@ -55,8 +52,7 @@ TEST_BEGIN(test_extra_no_move)
 }
 TEST_END
 
-TEST_BEGIN(test_no_move_fail)
-{
+TEST_BEGIN(test_no_move_fail) {
 	void *p;
 	size_t sz, tsz;
 
@@ -72,8 +68,7 @@ TEST_BEGIN(test_no_move_fail)
 TEST_END
 
 static unsigned
-get_nsizes_impl(const char *cmd)
-{
+get_nsizes_impl(const char *cmd) {
 	unsigned ret;
 	size_t z;
 
@@ -81,26 +76,21 @@ get_nsizes_impl(const char *cmd)
 	assert_d_eq(mallctl(cmd, (void *)&ret, &z, NULL, 0), 0,
 	    "Unexpected mallctl(\"%s\", ...) failure", cmd);
 
-	return (ret);
+	return ret;
 }
 
 static unsigned
-get_nsmall(void)
-{
-
-	return (get_nsizes_impl("arenas.nbins"));
+get_nsmall(void) {
+	return get_nsizes_impl("arenas.nbins");
 }
 
 static unsigned
-get_nlarge(void)
-{
-
-	return (get_nsizes_impl("arenas.nlextents"));
+get_nlarge(void) {
+	return get_nsizes_impl("arenas.nlextents");
 }
 
 static size_t
-get_size_impl(const char *cmd, size_t ind)
-{
+get_size_impl(const char *cmd, size_t ind) {
 	size_t ret;
 	size_t z;
 	size_t mib[4];
@@ -114,25 +104,20 @@ get_size_impl(const char *cmd, size_t ind)
 	assert_d_eq(mallctlbymib(mib, miblen, (void *)&ret, &z, NULL, 0),
 	    0, "Unexpected mallctlbymib([\"%s\", %zu], ...) failure", cmd, ind);
 
-	return (ret);
+	return ret;
 }
 
 static size_t
-get_small_size(size_t ind)
-{
-
-	return (get_size_impl("arenas.bin.0.size", ind));
+get_small_size(size_t ind) {
+	return get_size_impl("arenas.bin.0.size", ind);
 }
 
 static size_t
-get_large_size(size_t ind)
-{
-
-	return (get_size_impl("arenas.lextent.0.size", ind));
+get_large_size(size_t ind) {
+	return get_size_impl("arenas.lextent.0.size", ind);
 }
 
-TEST_BEGIN(test_size)
-{
+TEST_BEGIN(test_size) {
 	size_t small0, largemax;
 	void *p;
 
@@ -161,8 +146,7 @@ TEST_BEGIN(test_size)
 }
 TEST_END
 
-TEST_BEGIN(test_size_extra_overflow)
-{
+TEST_BEGIN(test_size_extra_overflow) {
 	size_t small0, largemax;
 	void *p;
 
@@ -193,8 +177,7 @@ TEST_BEGIN(test_size_extra_overflow)
 }
 TEST_END
 
-TEST_BEGIN(test_extra_small)
-{
+TEST_BEGIN(test_extra_small) {
 	size_t small0, small1, largemax;
 	void *p;
 
@@ -225,8 +208,7 @@ TEST_BEGIN(test_extra_small)
 }
 TEST_END
 
-TEST_BEGIN(test_extra_large)
-{
+TEST_BEGIN(test_extra_large) {
 	int flags = MALLOCX_ARENA(arena_ind());
 	size_t smallmax, large1, large2, large3, largemax;
 	void *p;
@@ -296,8 +278,7 @@ TEST_BEGIN(test_extra_large)
 TEST_END
 
 static void
-print_filled_extents(const void *p, uint8_t c, size_t len)
-{
+print_filled_extents(const void *p, uint8_t c, size_t len) {
 	const uint8_t *pc = (const uint8_t *)p;
 	size_t i, range0;
 	uint8_t c0;
@@ -316,30 +297,30 @@ print_filled_extents(const void *p, uint8_t c, size_t len)
 }
 
 static bool
-validate_fill(const void *p, uint8_t c, size_t offset, size_t len)
-{
+validate_fill(const void *p, uint8_t c, size_t offset, size_t len) {
 	const uint8_t *pc = (const uint8_t *)p;
 	bool err;
 	size_t i;
 
 	for (i = offset, err = false; i < offset+len; i++) {
-		if (pc[i] != c)
+		if (pc[i] != c) {
 			err = true;
+		}
 	}
 
-	if (err)
+	if (err) {
 		print_filled_extents(p, c, offset + len);
+	}
 
-	return (err);
+	return err;
 }
 
 static void
-test_zero(size_t szmin, size_t szmax)
-{
+test_zero(size_t szmin, size_t szmax) {
 	int flags = MALLOCX_ARENA(arena_ind()) | MALLOCX_ZERO;
 	size_t sz, nsz;
 	void *p;
-#define	FILL_BYTE 0x7aU
+#define FILL_BYTE 0x7aU
 
 	sz = szmax;
 	p = mallocx(sz, flags);
@@ -382,8 +363,7 @@ test_zero(size_t szmin, size_t szmax)
 	dallocx(p, flags);
 }
 
-TEST_BEGIN(test_zero_large)
-{
+TEST_BEGIN(test_zero_large) {
 	size_t large0, large1;
 
 	/* Get size classes. */
@@ -395,10 +375,8 @@ TEST_BEGIN(test_zero_large)
 TEST_END
 
 int
-main(void)
-{
-
-	return (test(
+main(void) {
+	return test(
 	    test_same_size,
 	    test_extra_no_move,
 	    test_no_move_fail,
@@ -406,5 +384,5 @@ main(void)
 	    test_size_extra_overflow,
 	    test_extra_small,
 	    test_extra_large,
-	    test_zero_large));
+	    test_zero_large);
 }

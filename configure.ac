@@ -239,7 +239,6 @@ if test "x$GCC" = "xyes" ; then
     fi
   fi
   JE_CFLAGS_ADD([-Wall])
-  JE_CFLAGS_ADD([-Werror=declaration-after-statement])
   JE_CFLAGS_ADD([-Wshorten-64-to-32])
   JE_CFLAGS_ADD([-Wsign-compare])
   JE_CFLAGS_ADD([-pipe])
@@ -296,7 +295,7 @@ if test "x$enable_cxx" = "x1" ; then
 ], [[
 	int *arr = (int *)malloc(sizeof(int) * 42);
 	if (arr == NULL)
-		return (1);
+		return 1;
 ]], [je_cv_libstdcxx])
     if test "x${je_cv_libstdcxx}" = "xno" ; then
       LIBS="${SAVED_LIBS}"
@@ -1317,6 +1316,36 @@ else
    AC_MSG_ERROR([cannot determine value for LG_PAGE])
 fi
 
+AC_ARG_WITH([lg_hugepage],
+  [AS_HELP_STRING([--with-lg-hugepage=<lg-hugepage>],
+   [Base 2 log of sytem huge page size])],
+  [je_cv_lg_hugepage="${with_lg_hugepage}"],
+  [je_cv_lg_hugepage=""])
+if test "x${je_cv_lg_hugepage}" = "x" ; then
+  dnl Look in /proc/meminfo (Linux-specific) for information on the default huge
+  dnl page size, if any.  The relevant line looks like:
+  dnl
+  dnl   Hugepagesize:       2048 kB
+  if test -e "/proc/meminfo" ; then
+    hpsk=[`cat /proc/meminfo 2>/dev/null | \
+          grep -e '^Hugepagesize:[[:space:]]\+[0-9]\+[[:space:]]kB$' | \
+          awk '{print $2}'`]
+    if test "x${hpsk}" != "x" ; then
+      je_cv_lg_hugepage=10
+      while test "${hpsk}" -gt 1 ; do
+        hpsk="$((hpsk / 2))"
+        je_cv_lg_hugepage="$((je_cv_lg_hugepage + 1))"
+      done
+    fi
+  fi
+
+  dnl Set default if unable to automatically configure.
+  if test "x${je_cv_lg_hugepage}" = "x" ; then
+    je_cv_lg_hugepage=21
+  fi
+fi
+AC_DEFINE_UNQUOTED([LG_HUGEPAGE], [${je_cv_lg_hugepage}])
+
 AC_ARG_WITH([lg_page_sizes],
   [AS_HELP_STRING([--with-lg-page-sizes=<lg-page-sizes>],
    [Base 2 logs of system page sizes to support])],
@@ -1630,7 +1659,7 @@ JE_COMPILABLE([C11 atomics], [
     uint64_t x = 1;
     volatile atomic_uint_least64_t *a = (volatile atomic_uint_least64_t *)p;
     uint64_t r = atomic_fetch_add(a, x) + x;
-    return (r == 0);
+    return r == 0;
 ], [je_cv_c11atomics])
 if test "x${je_cv_c11atomics}" = "xyes" ; then
   AC_DEFINE([JEMALLOC_C11ATOMICS])
@@ -1690,6 +1719,8 @@ JE_COMPILABLE([madvise(2)], [
 	madvise((void *)0, 0, 0);
 ], [je_cv_madvise])
 if test "x${je_cv_madvise}" = "xyes" ; then
+  AC_DEFINE([JEMALLOC_HAVE_MADVISE], [ ])
+
   dnl Check for madvise(..., MADV_FREE).
   JE_COMPILABLE([madvise(..., MADV_FREE)], [
 #include <sys/mman.h>
@@ -1710,9 +1741,15 @@ if test "x${je_cv_madvise}" = "xyes" ; then
     AC_DEFINE([JEMALLOC_PURGE_MADVISE_DONTNEED], [ ])
   fi
 
-  if test "x${je_cv_madv_free}" = "xyes" \
-       -o "x${je_cv_madv_dontneed}" = "xyes" ; then
-    AC_DEFINE([JEMALLOC_HAVE_MADVISE], [ ])
+  dnl Check for madvise(..., MADV_[NO]HUGEPAGE).
+  JE_COMPILABLE([madvise(..., MADV_[[NO]]HUGEPAGE)], [
+#include <sys/mman.h>
+], [
+	madvise((void *)0, 0, MADV_HUGEPAGE);
+	madvise((void *)0, 0, MADV_NOHUGEPAGE);
+], [je_cv_thp])
+  if test "x${je_cv_thp}" = "xyes" ; then
+    AC_DEFINE([JEMALLOC_THP], [ ])
   fi
 fi
 
@@ -1831,37 +1868,6 @@ if test "x${enable_zone_allocator}" = "x1" ; then
     AC_MSG_ERROR([--enable-zone-allocator is only supported on Darwin])
   fi
   AC_DEFINE([JEMALLOC_ZONE], [ ])
-
-  dnl The szone version jumped from 3 to 6 between the OS X 10.5.x and 10.6
-  dnl releases.  malloc_zone_t and malloc_introspection_t have new fields in
-  dnl 10.6, which is the only source-level indication of the change.
-  AC_MSG_CHECKING([malloc zone version])
-  AC_DEFUN([JE_ZONE_PROGRAM],
-    [AC_LANG_PROGRAM(
-      [#include <malloc/malloc.h>],
-      [static int foo[[sizeof($1) $2 sizeof(void *) * $3 ? 1 : -1]]]
-    )])
-
-  AC_COMPILE_IFELSE([JE_ZONE_PROGRAM(malloc_zone_t,==,14)],[JEMALLOC_ZONE_VERSION=3],[
-  AC_COMPILE_IFELSE([JE_ZONE_PROGRAM(malloc_zone_t,==,15)],[JEMALLOC_ZONE_VERSION=5],[
-  AC_COMPILE_IFELSE([JE_ZONE_PROGRAM(malloc_zone_t,==,16)],[
-    AC_COMPILE_IFELSE([JE_ZONE_PROGRAM(malloc_introspection_t,==,9)],[JEMALLOC_ZONE_VERSION=6],[
-    AC_COMPILE_IFELSE([JE_ZONE_PROGRAM(malloc_introspection_t,==,13)],[JEMALLOC_ZONE_VERSION=7],[JEMALLOC_ZONE_VERSION=]
-  )])],[
-  AC_COMPILE_IFELSE([JE_ZONE_PROGRAM(malloc_zone_t,==,17)],[JEMALLOC_ZONE_VERSION=8],[
-  AC_COMPILE_IFELSE([JE_ZONE_PROGRAM(malloc_zone_t,>,17)],[JEMALLOC_ZONE_VERSION=9],[JEMALLOC_ZONE_VERSION=]
-  )])])])])
-  if test "x${JEMALLOC_ZONE_VERSION}" = "x"; then
-    AC_MSG_RESULT([unsupported])
-    AC_MSG_ERROR([Unsupported malloc zone version])
-  fi
-  if test "${JEMALLOC_ZONE_VERSION}" = 9; then
-    JEMALLOC_ZONE_VERSION=8
-    AC_MSG_RESULT([> 8])
-  else
-    AC_MSG_RESULT([$JEMALLOC_ZONE_VERSION])
-  fi
-  AC_DEFINE_UNQUOTED(JEMALLOC_ZONE_VERSION, [$JEMALLOC_ZONE_VERSION])
 fi
 
 dnl ============================================================================

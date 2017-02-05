@@ -7,9 +7,9 @@ const char *malloc_conf = "decay_time:-1";
  * Size class that is a divisor of the page size, ideally 4+ regions per run.
  */
 #if LG_PAGE <= 14
-#define	SZ	(ZU(1) << (LG_PAGE - 2))
+#define SZ	(ZU(1) << (LG_PAGE - 2))
 #else
-#define	SZ	4096
+#define SZ	4096
 #endif
 
 /*
@@ -17,11 +17,10 @@ const char *malloc_conf = "decay_time:-1";
  * if mmap()ed memory grows downward, downward growth of mmap()ed memory is
  * tested.
  */
-#define	NSLABS	8
+#define NSLABS	8
 
 static unsigned
-binind_compute(void)
-{
+binind_compute(void) {
 	size_t sz;
 	unsigned nbins, i;
 
@@ -41,17 +40,17 @@ binind_compute(void)
 		sz = sizeof(size);
 		assert_d_eq(mallctlbymib(mib, miblen, (void *)&size, &sz, NULL,
 		    0), 0, "Unexpected mallctlbymib failure");
-		if (size == SZ)
-			return (i);
+		if (size == SZ) {
+			return i;
+		}
 	}
 
 	test_fail("Unable to compute nregs_per_run");
-	return (0);
+	return 0;
 }
 
 static size_t
-nregs_per_run_compute(void)
-{
+nregs_per_run_compute(void) {
 	uint32_t nregs;
 	size_t sz;
 	unsigned binind = binind_compute();
@@ -64,25 +63,23 @@ nregs_per_run_compute(void)
 	sz = sizeof(nregs);
 	assert_d_eq(mallctlbymib(mib, miblen, (void *)&nregs, &sz, NULL,
 	    0), 0, "Unexpected mallctlbymib failure");
-	return (nregs);
+	return nregs;
 }
 
 static unsigned
-arenas_extend_mallctl(void)
-{
+arenas_create_mallctl(void) {
 	unsigned arena_ind;
 	size_t sz;
 
 	sz = sizeof(arena_ind);
-	assert_d_eq(mallctl("arenas.extend", (void *)&arena_ind, &sz, NULL, 0),
-	    0, "Error in arenas.extend");
+	assert_d_eq(mallctl("arenas.create", (void *)&arena_ind, &sz, NULL, 0),
+	    0, "Error in arenas.create");
 
-	return (arena_ind);
+	return arena_ind;
 }
 
 static void
-arena_reset_mallctl(unsigned arena_ind)
-{
+arena_reset_mallctl(unsigned arena_ind) {
 	size_t mib[3];
 	size_t miblen = sizeof(mib)/sizeof(size_t);
 
@@ -93,9 +90,8 @@ arena_reset_mallctl(unsigned arena_ind)
 	    "Unexpected mallctlbymib() failure");
 }
 
-TEST_BEGIN(test_pack)
-{
-	unsigned arena_ind = arenas_extend_mallctl();
+TEST_BEGIN(test_pack) {
+	unsigned arena_ind = arenas_create_mallctl();
 	size_t nregs_per_run = nregs_per_run_compute();
 	size_t nregs = nregs_per_run * NSLABS;
 	VARIABLE_ARRAY(void *, ptrs, nregs);
@@ -125,8 +121,9 @@ TEST_BEGIN(test_pack)
 	    i++, offset = (offset + 1) % nregs_per_run) {
 		for (j = 0; j < nregs_per_run; j++) {
 			void *p = ptrs[(i * nregs_per_run) + j];
-			if (offset == j)
+			if (offset == j) {
 				continue;
+			}
 			dallocx(p, MALLOCX_ARENA(arena_ind) |
 			    MALLOCX_TCACHE_NONE);
 		}
@@ -143,8 +140,9 @@ TEST_BEGIN(test_pack)
 		for (j = 0; j < nregs_per_run; j++) {
 			void *p;
 
-			if (offset == j)
+			if (offset == j) {
 				continue;
+			}
 			p = mallocx(SZ, MALLOCX_ARENA(arena_ind) |
 			    MALLOCX_TCACHE_NONE);
 			assert_ptr_eq(p, ptrs[(i * nregs_per_run) + j],
@@ -159,9 +157,7 @@ TEST_BEGIN(test_pack)
 TEST_END
 
 int
-main(void)
-{
-
-	return (test(
-	    test_pack));
+main(void) {
+	return test(
+	    test_pack);
 }

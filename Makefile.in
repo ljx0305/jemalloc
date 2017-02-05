@@ -156,6 +156,7 @@ TESTS_UNIT := \
 	$(srcroot)test/unit/a0.c \
 	$(srcroot)test/unit/arena_reset.c \
 	$(srcroot)test/unit/atomic.c \
+	$(srcroot)test/unit/base.c \
 	$(srcroot)test/unit/bitmap.c \
 	$(srcroot)test/unit/ckh.c \
 	$(srcroot)test/unit/decay.c \
@@ -170,6 +171,7 @@ TESTS_UNIT := \
 	$(srcroot)test/unit/mq.c \
 	$(srcroot)test/unit/mtx.c \
 	$(srcroot)test/unit/pack.c \
+	$(srcroot)test/unit/pages.c \
 	$(srcroot)test/unit/ph.c \
 	$(srcroot)test/unit/prng.c \
 	$(srcroot)test/unit/prof_accum.c \
@@ -177,6 +179,7 @@ TESTS_UNIT := \
 	$(srcroot)test/unit/prof_gdump.c \
 	$(srcroot)test/unit/prof_idump.c \
 	$(srcroot)test/unit/prof_reset.c \
+	$(srcroot)test/unit/prof_tctx.c \
 	$(srcroot)test/unit/prof_thread_name.c \
 	$(srcroot)test/unit/ql.c \
 	$(srcroot)test/unit/qr.c \
@@ -184,14 +187,20 @@ TESTS_UNIT := \
 	$(srcroot)test/unit/rtree.c \
 	$(srcroot)test/unit/SFMT.c \
 	$(srcroot)test/unit/size_classes.c \
+	$(srcroot)test/unit/slab.c \
 	$(srcroot)test/unit/smoothstep.c \
 	$(srcroot)test/unit/stats.c \
+	$(srcroot)test/unit/stats_print.c \
 	$(srcroot)test/unit/ticker.c \
 	$(srcroot)test/unit/nstime.c \
 	$(srcroot)test/unit/tsd.c \
 	$(srcroot)test/unit/util.c \
 	$(srcroot)test/unit/witness.c \
 	$(srcroot)test/unit/zero.c
+ifeq (@enable_prof@, 1)
+TESTS_UNIT += \
+	$(srcroot)test/unit/arena_reset_prof.c
+endif
 TESTS_INTEGRATION := $(srcroot)test/integration/aligned_alloc.c \
 	$(srcroot)test/integration/allocated.c \
 	$(srcroot)test/integration/extent.c \

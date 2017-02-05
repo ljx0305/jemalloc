@@ -426,13 +426,14 @@ for (i = 0; i < nbins; i++) {
       <function>mallctl*()</function> functions internally, so inconsistent
       statistics can be reported if multiple threads use these functions
       simultaneously.  If <option>--enable-stats</option> is specified during
-      configuration, <quote>m</quote> and <quote>a</quote> can be specified to
-      omit merged arena and per arena statistics, respectively; <quote>b</quote>
-      and <quote>l</quote> can be specified to omit per size class statistics
-      for bins and large objects, respectively.  Unrecognized characters are
-      silently ignored.  Note that thread caching may prevent some statistics
-      from being completely up to date, since extra locking would be required to
-      merge counters that track thread cache operations.</para>
+      configuration, <quote>m</quote>, <quote>d</quote>, and <quote>a</quote>
+      can be specified to omit merged arena, destroyed merged arena, and per
+      arena statistics, respectively; <quote>b</quote> and <quote>l</quote> can
+      be specified to omit per size class statistics for bins and large objects,
+      respectively.  Unrecognized characters are silently ignored.  Note that
+      thread caching may prevent some statistics from being completely up to
+      date, since extra locking would be required to merge counters that track
+      thread cache operations.</para>
 
       <para>The <function>malloc_usable_size()</function> function
       returns the usable size of the allocation pointed to by
@@ -687,19 +688,32 @@ for (i = 0; i < nbins; i++) {
   <refsect1 id="mallctl_namespace">
     <title>MALLCTL NAMESPACE</title>
     <para>The following names are defined in the namespace accessible via the
-    <function>mallctl*()</function> functions.  Value types are
-    specified in parentheses, their readable/writable statuses are encoded as
+    <function>mallctl*()</function> functions.  Value types are specified in
+    parentheses, their readable/writable statuses are encoded as
     <literal>rw</literal>, <literal>r-</literal>, <literal>-w</literal>, or
     <literal>--</literal>, and required build configuration flags follow, if
     any.  A name element encoded as <literal>&lt;i&gt;</literal> or
     <literal>&lt;j&gt;</literal> indicates an integer component, where the
     integer varies from 0 to some upper value that must be determined via
-    introspection.  In the case of <mallctl>stats.arenas.&lt;i&gt;.*</mallctl>,
-    <literal>&lt;i&gt;</literal> equal to <link
-    linkend="arenas.narenas"><mallctl>arenas.narenas</mallctl></link> can be
-    used to access the summation of statistics from all arenas.  Take special
-    note of the <link linkend="epoch"><mallctl>epoch</mallctl></link> mallctl,
-    which controls refreshing of cached dynamic statistics.</para>
+    introspection.  In the case of <mallctl>stats.arenas.&lt;i&gt;.*</mallctl>
+    and <mallctl>arena.&lt;i&gt;.{initialized,purge,decay,dss}</mallctl>,
+    <literal>&lt;i&gt;</literal> equal to
+    <constant>MALLCTL_ARENAS_ALL</constant> can be used to operate on all arenas
+    or access the summation of statistics from all arenas; similarly
+    <literal>&lt;i&gt;</literal> equal to
+    <constant>MALLCTL_ARENAS_DESTROYED</constant> can be used to access the
+    summation of statistics from all destroyed arenas.  These constants can be
+    utilized either via <function>mallctlnametomib()</function> followed by
+    <function>mallctlbymib()</function>, or via code such as the following:
+    <programlisting language="C"><![CDATA[
+#define STRINGIFY_HELPER(x) #x
+#define STRINGIFY(x) STRINGIFY_HELPER(x)
+
+mallctl("arena." STRINGIFY(MALLCTL_ARENAS_ALL) ".decay",
+    NULL, NULL, NULL, 0);]]></programlisting>
+    Take special note of the <link
+    linkend="epoch"><mallctl>epoch</mallctl></link> mallctl, which controls
+    refreshing of cached dynamic statistics.</para>
 
     <variablelist>
       <varlistentry id="version">
@@ -1243,7 +1257,7 @@ malloc_conf = "xmalloc:true";]]></programlisting>
         <listitem><para>Get or set the arena associated with the calling
         thread.  If the specified arena was not initialized beforehand (see the
         <link
-        linkend="arenas.initialized"><mallctl>arenas.initialized</mallctl></link>
+        linkend="arena.i.initialized"><mallctl>arena.i.initialized</mallctl></link>
         mallctl), it will be automatically initialized as a side effect of
         calling this interface.</para></listitem>
       </varlistentry>
@@ -1415,6 +1429,19 @@ malloc_conf = "xmalloc:true";]]></programlisting>
         </para></listitem>
       </varlistentry>
 
+      <varlistentry id="arena.i.initialized">
+        <term>
+          <mallctl>arena.&lt;i&gt;.initialized</mallctl>
+          (<type>bool</type>)
+          <literal>r-</literal>
+        </term>
+        <listitem><para>Get whether the specified arena's statistics are
+        initialized (i.e. the arena was initialized prior to the current epoch).
+        This interface can also be nominally used to query whether the merged
+        statistics corresponding to <constant>MALLCTL_ARENAS_ALL</constant> are
+        initialized (always true).</para></listitem>
+      </varlistentry>
+
       <varlistentry id="arena.i.purge">
         <term>
           <mallctl>arena.&lt;i&gt;.purge</mallctl>
@@ -1422,8 +1449,7 @@ malloc_conf = "xmalloc:true";]]></programlisting>
           <literal>--</literal>
         </term>
         <listitem><para>Purge all unused dirty pages for arena &lt;i&gt;, or for
-        all arenas if &lt;i&gt; equals <link
-        linkend="arenas.narenas"><mallctl>arenas.narenas</mallctl></link>.
+        all arenas if &lt;i&gt; equals <constant>MALLCTL_ARENAS_ALL</constant>.
         </para></listitem>
       </varlistentry>
 
@@ -1434,10 +1460,9 @@ malloc_conf = "xmalloc:true";]]></programlisting>
           <literal>--</literal>
         </term>
         <listitem><para>Trigger decay-based purging of unused dirty pages for
-        arena &lt;i&gt;, or for all arenas if &lt;i&gt; equals <link
-        linkend="arenas.narenas"><mallctl>arenas.narenas</mallctl></link>.
-        The proportion of unused dirty pages to be purged depends on the current
-        time; see <link
+        arena &lt;i&gt;, or for all arenas if &lt;i&gt; equals
+        <constant>MALLCTL_ARENAS_ALL</constant>.  The proportion of unused dirty
+        pages to be purged depends on the current time; see <link
         linkend="opt.decay_time"><mallctl>opt.decay_time</mallctl></link> for
         details.</para></listitem>
       </varlistentry>
@@ -1449,12 +1474,31 @@ malloc_conf = "xmalloc:true";]]></programlisting>
           <literal>--</literal>
         </term>
         <listitem><para>Discard all of the arena's extant allocations.  This
-        interface can only be used with arenas created via <link
-        linkend="arenas.extend"><mallctl>arenas.extend</mallctl></link>.  None
+        interface can only be used with arenas explicitly created via <link
+        linkend="arenas.create"><mallctl>arenas.create</mallctl></link>.  None
         of the arena's discarded/cached allocations may accessed afterward.  As
         part of this requirement, all thread caches which were used to
         allocate/deallocate in conjunction with the arena must be flushed
         beforehand.</para></listitem>
+      </varlistentry>
+
+      <varlistentry id="arena.i.destroy">
+        <term>
+          <mallctl>arena.&lt;i&gt;.destroy</mallctl>
+          (<type>void</type>)
+          <literal>--</literal>
+        </term>
+        <listitem><para>Destroy the arena.  Discard all of the arena's extant
+        allocations using the same mechanism as for <link
+        linkend="arena.i.reset"><mallctl>arena.&lt;i&gt;.reset</mallctl></link>
+        (with all the same constraints and side effects), merge the arena stats
+        into those accessible at arena index
+        <constant>MALLCTL_ARENAS_DESTROYED</constant>, and then completely
+        discard all metadata associated with the arena.  Future calls to <link
+        linkend="arenas.create"><mallctl>arenas.create</mallctl></link> may
+        recycle the arena index.  Destruction will fail if any threads are
+        currently associated with the arena as a result of calls to <link
+        linkend="thread.arena"><mallctl>thread.arena</mallctl></link>.</para></listitem>
       </varlistentry>
 
       <varlistentry id="arena.i.dss">
@@ -1465,9 +1509,8 @@ malloc_conf = "xmalloc:true";]]></programlisting>
         </term>
         <listitem><para>Set the precedence of dss allocation as related to mmap
         allocation for arena &lt;i&gt;, or for all arenas if &lt;i&gt; equals
-        <link
-        linkend="arenas.narenas"><mallctl>arenas.narenas</mallctl></link>.  See
-        <link linkend="opt.dss"><mallctl>opt.dss</mallctl></link> for supported
+        <constant>MALLCTL_ARENAS_ALL</constant>.  See <link
+        linkend="opt.dss"><mallctl>opt.dss</mallctl></link> for supported
         settings.</para></listitem>
       </varlistentry>
 
@@ -1497,12 +1540,12 @@ malloc_conf = "xmalloc:true";]]></programlisting>
         arena &lt;i&gt;.  The functions must be capable of operating on all
         extant extents associated with arena &lt;i&gt;, usually by passing
         unknown extents to the replaced functions.  In practice, it is feasible
-        to control allocation for arenas created via <link
-        linkend="arenas.extend"><mallctl>arenas.extend</mallctl></link> such
+        to control allocation for arenas explicitly created via <link
+        linkend="arenas.create"><mallctl>arenas.create</mallctl></link> such
         that all extents originate from an application-supplied extent allocator
-        (by setting custom extent hook functions just after arena creation), but
-        the automatically created arenas may have already created extents prior
-        to the application having an opportunity to take over extent
+        (by specifying the custom extent hook functions during arena creation),
+        but the automatically created arenas will have already created extents
+        prior to the application having an opportunity to take over extent
         allocation.</para>
 
         <programlisting language="C"><![CDATA[
@@ -1512,7 +1555,8 @@ struct extent_hooks_s {
 	extent_dalloc_t		*dalloc;
 	extent_commit_t		*commit;
 	extent_decommit_t	*decommit;
-	extent_purge_t		*purge;
+	extent_purge_t		*purge_lazy;
+	extent_purge_t		*purge_forced;
 	extent_split_t		*split;
 	extent_merge_t		*merge;
 };]]></programlisting>
@@ -1522,13 +1566,12 @@ struct extent_hooks_s {
         mapped committed memory, in the simplest case followed by deallocation.
         However, there are performance and platform reasons to retain extents
         for later reuse.  Cleanup attempts cascade from deallocation to decommit
-        to purging, which gives the extent management functions opportunities to
-        reject the most permanent cleanup operations in favor of less permanent
-        (and often less costly) operations.  The extent splitting and merging
-        operations can also be opted out of, but this is mainly intended to
-        support platforms on which virtual memory mappings provided by the
-        operating system kernel do not automatically coalesce and split, e.g.
-        Windows.</para>
+        to lazy purging to forced purging, which gives the extent management
+        functions opportunities to reject the most permanent cleanup operations
+        in favor of less permanent (and often less costly) operations.  All
+        operations except allocation can be universally opted out of by setting
+        the hook pointers to <constant>NULL</constant>, or selectively opted out
+        of by returning failure.</para>
 
         <funcsynopsis><funcprototype>
           <funcdef>typedef void *<function>(extent_alloc_t)</function></funcdef>
@@ -1634,21 +1677,24 @@ struct extent_hooks_s {
           <funcdef>typedef bool <function>(extent_purge_t)</function></funcdef>
           <paramdef>extent_hooks_t *<parameter>extent_hooks</parameter></paramdef>
           <paramdef>void *<parameter>addr</parameter></paramdef>
-          <paramdef>size_t<parameter>size</parameter></paramdef>
+          <paramdef>size_t <parameter>size</parameter></paramdef>
           <paramdef>size_t <parameter>offset</parameter></paramdef>
           <paramdef>size_t <parameter>length</parameter></paramdef>
           <paramdef>unsigned <parameter>arena_ind</parameter></paramdef>
         </funcprototype></funcsynopsis>
         <literallayout></literallayout>
         <para>An extent purge function conforms to the
-        <type>extent_purge_t</type> type and optionally discards physical pages
+        <type>extent_purge_t</type> type and discards physical pages
         within the virtual memory mapping associated with an extent at given
         <parameter>addr</parameter> and <parameter>size</parameter> at
         <parameter>offset</parameter> bytes, extending for
         <parameter>length</parameter> on behalf of arena
-        <parameter>arena_ind</parameter>, returning false if pages within the
-        purged virtual memory range will be zero-filled the next time they are
-        accessed.</para>
+        <parameter>arena_ind</parameter>.  A lazy extent purge function can
+        delay purging indefinitely and leave the pages within the purged virtual
+        memory range in an indeterminite state, whereas a forced extent purge
+        function immediately purges, and the pages within the virtual memory
+        range will be zero-filled the next time they are accessed.  If the
+        function returns true, this indicates failure to purge.</para>
 
         <funcsynopsis><funcprototype>
           <funcdef>typedef bool <function>(extent_split_t)</function></funcdef>
@@ -1703,18 +1749,6 @@ struct extent_hooks_s {
           <literal>r-</literal>
         </term>
         <listitem><para>Current limit on number of arenas.</para></listitem>
-      </varlistentry>
-
-      <varlistentry id="arenas.initialized">
-        <term>
-          <mallctl>arenas.initialized</mallctl>
-          (<type>bool *</type>)
-          <literal>r-</literal>
-        </term>
-        <listitem><para>An array of <link
-        linkend="arenas.narenas"><mallctl>arenas.narenas</mallctl></link>
-        booleans.  Each boolean indicates whether the corresponding arena is
-        initialized.</para></listitem>
       </varlistentry>
 
       <varlistentry id="arenas.decay_time">
@@ -1826,14 +1860,15 @@ struct extent_hooks_s {
         class.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="arenas.extend">
+      <varlistentry id="arenas.create">
         <term>
-          <mallctl>arenas.extend</mallctl>
-          (<type>unsigned</type>)
-          <literal>r-</literal>
+          <mallctl>arenas.create</mallctl>
+          (<type>unsigned</type>, <type>extent_hooks_t *</type>)
+          <literal>rw</literal>
         </term>
-        <listitem><para>Extend the array of arenas by appending a new arena,
-        and returning the new arena index.</para></listitem>
+        <listitem><para>Explicitly create a new arena outside the range of
+        automatically managed arenas, with optionally specified extent hooks,
+        and return the new arena index.</para></listitem>
       </varlistentry>
 
       <varlistentry id="prof.thread_active_init">
@@ -1973,9 +2008,11 @@ struct extent_hooks_s {
           [<option>--enable-stats</option>]
         </term>
         <listitem><para>Total number of bytes dedicated to metadata, which
-        comprise base allocations used for bootstrap-sensitive internal
-        allocator data structures and internal allocations (see <link
-        linkend="stats.arenas.i.metadata"><mallctl>stats.arenas.&lt;i&gt;.metadata</mallctl></link>).</para></listitem>
+        comprise base allocations used for bootstrap-sensitive allocator
+        metadata structures (see <link
+        linkend="stats.arenas.i.base"><mallctl>stats.arenas.&lt;i&gt;.base</mallctl></link>)
+        and internal allocations (see <link
+        linkend="stats.arenas.i.internal"><mallctl>stats.arenas.&lt;i&gt;.internal</mallctl></link>).</para></listitem>
       </varlistentry>
 
       <varlistentry id="stats.resident">
@@ -2111,9 +2148,21 @@ struct extent_hooks_s {
         details.</para></listitem>
       </varlistentry>
 
-      <varlistentry id="stats.arenas.i.metadata">
+      <varlistentry id="stats.arenas.i.base">
         <term>
-          <mallctl>stats.arenas.&lt;i&gt;.metadata</mallctl>
+          <mallctl>stats.arenas.&lt;i&gt;.base</mallctl>
+          (<type>size_t</type>)
+          <literal>r-</literal>
+          [<option>--enable-stats</option>]
+        </term>
+        <listitem><para>
+        Number of bytes dedicated to bootstrap-sensitive allocator metadata
+        structures.</para></listitem>
+      </varlistentry>
+
+      <varlistentry id="stats.arenas.i.internal">
+        <term>
+          <mallctl>stats.arenas.&lt;i&gt;.internal</mallctl>
           (<type>size_t</type>)
           <literal>r-</literal>
           [<option>--enable-stats</option>]
@@ -2121,13 +2170,23 @@ struct extent_hooks_s {
         <listitem><para>Number of bytes dedicated to internal allocations.
         Internal allocations differ from application-originated allocations in
         that they are for internal use, and that they are omitted from heap
-        profiles.  This statistic is reported separately from <link
-        linkend="stats.metadata"><mallctl>stats.metadata</mallctl></link>
-        because it overlaps with e.g. the <link
-        linkend="stats.allocated"><mallctl>stats.allocated</mallctl></link> and
-        <link linkend="stats.active"><mallctl>stats.active</mallctl></link>
-        statistics, whereas the other metadata statistics do
-        not.</para></listitem>
+        profiles.</para></listitem>
+      </varlistentry>
+
+      <varlistentry id="stats.arenas.i.resident">
+        <term>
+          <mallctl>stats.arenas.&lt;i&gt;.resident</mallctl>
+          (<type>size_t</type>)
+          <literal>r-</literal>
+          [<option>--enable-stats</option>]
+        </term>
+        <listitem><para>Maximum number of bytes in physically resident data
+        pages mapped by the arena, comprising all pages dedicated to allocator
+        metadata, pages backing active allocations, and unused dirty pages.
+        This is a maximum rather than precise because pages may not actually be
+        physically resident if they correspond to demand-zeroed virtual memory
+        that has not yet been touched.  This is a multiple of the page
+        size.</para></listitem>
       </varlistentry>
 
       <varlistentry id="stats.arenas.i.npurge">

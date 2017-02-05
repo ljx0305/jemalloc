@@ -1,7 +1,7 @@
 #include <mutex>
 #include <new>
 
-#define	JEMALLOC_CPP_CPP_
+#define JEMALLOC_CPP_CPP_
 #include "jemalloc/internal/jemalloc_internal.h"
 
 // All operators in this file are exported.
@@ -17,28 +17,26 @@
 
 void	*operator new(std::size_t size);
 void	*operator new[](std::size_t size);
-void	*operator new(std::size_t size, const std::nothrow_t&) noexcept;
-void	*operator new[](std::size_t size, const std::nothrow_t&) noexcept;
-void	operator delete(void* ptr) noexcept;
-void	operator delete[](void* ptr) noexcept;
-void	operator delete(void* ptr, const std::nothrow_t&) noexcept;
-void	operator delete[](void* ptr, const std::nothrow_t&) noexcept;
+void	*operator new(std::size_t size, const std::nothrow_t &) noexcept;
+void	*operator new[](std::size_t size, const std::nothrow_t &) noexcept;
+void	operator delete(void *ptr) noexcept;
+void	operator delete[](void *ptr) noexcept;
+void	operator delete(void *ptr, const std::nothrow_t &) noexcept;
+void	operator delete[](void *ptr, const std::nothrow_t &) noexcept;
 
 #if __cpp_sized_deallocation >= 201309
 /* C++14's sized-delete operators. */
-void	operator delete(void* ptr, std::size_t size) noexcept;
-void	operator delete[](void* ptr, std::size_t size) noexcept;
+void	operator delete(void *ptr, std::size_t size) noexcept;
+void	operator delete[](void *ptr, std::size_t size) noexcept;
 #endif
-
 
 template <bool IsNoExcept>
 JEMALLOC_INLINE
 void *
-newImpl(std::size_t size) noexcept(IsNoExcept)
-{
-	void* ptr = je_malloc(size);
+newImpl(std::size_t size) noexcept(IsNoExcept) {
+	void *ptr = je_malloc(size);
 	if (likely(ptr != nullptr))
-		return (ptr);
+		return ptr;
 
 	while (ptr == nullptr) {
 		std::new_handler handler;
@@ -55,7 +53,7 @@ newImpl(std::size_t size) noexcept(IsNoExcept)
 
 		try {
 			handler();
-		} catch (const std::bad_alloc&) {
+		} catch (const std::bad_alloc &) {
 			break;
 		}
 
@@ -64,76 +62,62 @@ newImpl(std::size_t size) noexcept(IsNoExcept)
 
 	if (ptr == nullptr && !IsNoExcept)
 		std::__throw_bad_alloc();
-	return (ptr);
+	return ptr;
 }
 
 void *
-operator new(std::size_t size)
-{
-
-	return (newImpl<false>(size));
+operator new(std::size_t size) {
+	return newImpl<false>(size);
 }
 
 void *
-operator new[](std::size_t size)
-{
-
-	return (newImpl<false>(size));
+operator new[](std::size_t size) {
+	return newImpl<false>(size);
 }
 
 void *
-operator new(std::size_t size, const std::nothrow_t&) noexcept
-{
-
-	return (newImpl<true>(size));
+operator new(std::size_t size, const std::nothrow_t &) noexcept {
+	return newImpl<true>(size);
 }
 
 void *
-operator new[](std::size_t size, const std::nothrow_t&) noexcept
-{
-
-  return (newImpl<true>(size));
+operator new[](std::size_t size, const std::nothrow_t &) noexcept {
+	return newImpl<true>(size);
 }
 
 void
-operator delete(void* ptr) noexcept
-{
-
+operator delete(void *ptr) noexcept {
 	je_free(ptr);
 }
 
 void
-operator delete[](void* ptr) noexcept
-{
-
+operator delete[](void *ptr) noexcept {
 	je_free(ptr);
 }
 
 void
-operator delete(void* ptr, const std::nothrow_t&) noexcept
-{
-
+operator delete(void *ptr, const std::nothrow_t &) noexcept {
 	je_free(ptr);
 }
 
-void operator delete[](void* ptr, const std::nothrow_t&) noexcept
-{
-
+void operator delete[](void *ptr, const std::nothrow_t &) noexcept {
 	je_free(ptr);
 }
 
 #if __cpp_sized_deallocation >= 201309
 
 void
-operator delete(void* ptr, std::size_t size) noexcept
-{
-
+operator delete(void *ptr, std::size_t size) noexcept {
+	if (unlikely(ptr == nullptr)) {
+		return;
+	}
 	je_sdallocx(ptr, size, /*flags=*/0);
 }
 
-void operator delete[](void* ptr, std::size_t size) noexcept
-{
-
+void operator delete[](void *ptr, std::size_t size) noexcept {
+	if (unlikely(ptr == nullptr)) {
+		return;
+	}
 	je_sdallocx(ptr, size, /*flags=*/0);
 }
 
